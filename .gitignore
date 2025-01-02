@@ -1,3 +1,9 @@
+#Apple stuff
+.DS_Store
+.AppleDouble
+.LSOverride
+
+
 # History files
 .Rhistory
 .Rapp.history
