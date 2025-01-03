@@ -1,0 +1,45 @@
+---
+title: "Homework 1"
+author: "EEMB174/274"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# Bayesian Statistical Modeling Winter 2025
+# Homework, Week 1
+
+*When is homework due?* Homework is due on Mondays (Tuesday if Monday is a holiday). This assignment is due on Monday, 1/13/2025. Submit homework to canvas
+
+
+*Before submitting your work* You should use this file as a template for completing the assignment. You should change the author to your name. You should use the features of Rmarkdown to write your text answers below and include R code and equations where necessary. You should turn in both the .Rmd file as well as the pdf file that you generate by using the `Knit` button.
+
+
+# Running the shiny app
+This assignment is a walkthough of using the virutal machine to run a shiny app. Once you have your VM up and running you can navigate the filesystem and find the file app.R under "Distributed Class Material". This app performs the Bayesian calculation we discussed in class, namely what is the probability of having covid given cold-like symptoms.
+
+
+## Question 1: Baye's rule   
+**The calculation uses Bayes rule and expresses relationships between conditional probabilities.**
+
+### 1A: What is the conditional probability that we are trying to calculate? Write this in words and symbols, as best you can.
+
+
+
+
+### 1B: I gave two versions of the calculation in class. The simpler version assumed that you could not have both a cold and covid, while the more complicated one assumed you could have both. Write out one of these as best you can.
+
+
+
+
+## Question 2: Bayesian updated covid odds
+
+### 2A: Low covid prevalence
+**Set the slider to a low value for covid prevalence. Report the value you chose, and describe the graph and explain why you believe it has the shape and values.**
+
+
+
+
+### 2B: High covid prevalence
+**Set the slider to a high value for covid prevalence. Report the value you chose, and describe the graph and explain why you beleive it has the shape and values. How is it different from the low value?**

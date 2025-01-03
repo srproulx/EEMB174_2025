@@ -1,0 +1,31 @@
+---
+title: "Homework 2"
+author: "EEMB 174-274"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# Bayesian Statistical Modeling Winter 2025
+# Homework, Week 2
+
+*When is homework due?* Homework is due on Mondays (Tuesday if Monday is a holiday). This assignment is due on Tuesday, 1/21/2025. Submit homework to canvas: 
+
+*Before submitting your work* You should use this file as a template for completing the assignment. You should change the author to your name. You should use the features of Rmarkdown to write your text answers below and include R code and equations where necessary. You should turn in both the .Rmd file as well as the pdf file that you generate by using the `Knit` button.
+
+
+Complete problems from the end of chapter 2.
+
+* 2E1
+
+* 2E2
+
+* 2M1
+
+* 2M2
+
+* 2M3
+
+* 2H1
+
