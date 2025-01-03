@@ -1,0 +1,190 @@
+---
+title: 'Day 3: Bayesian Updating'
+author: "Stephen R. Proulx"
+date: "12/31/2025"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(rethinking)
+```
+
+# Calculating posterior probability distribution using grid approximation
+
+Goals for today:
+* Understand how to write down the formula for the posterior distribution
+* Use R to perform grid approximation for a single random trial or a binomial likelihood
+* Perform multiple rounds of Bayesian updating to understand how previous experiments become part of the prior probability.
+
+
+
+
+## Recipe for doing Bayesian updating by "grid approximation"
+
+Remember that the basic formula is 
+$$
+\mathrm{Posterior}(p | d) = \frac{\mathrm{Likelihood}(d | p) * \mathrm{prior}(p)}{\mathrm{norm(d)}}
+$$
+The function $\mathrm{norm(d)}$ is a function of the data: This is because it integrates over all possible values of the parameters. So while this does not depend on the parameters, it does depend on the choice of possible parameters. We could also call this the total probability of the data, which really means the total likelihood of observing the data given the "small world" that we have constructed.
+
+1.  Write your likelihood function: This is the model or "data story" and reflects your knowledge and assumptions about the biological system.
+
+2. Identify the parameters, these are the part of the likelihood function that are unknown.  Decide what the range of possible parameter values is. (there may be variables that you decide are known, like how many samples you have collected. It is a variable, but we won't consider it to be a parameter.)
+
+3. Create a "grid" of the parameters. You have the ability to make this grid regular (i.e. each point is the same distance from its neighbor) or scaled some other way.  This will really be a list of points in the grid, i.e. a table where each row is a set of parameters to be considered. 
+
+4. Calculate the likelihood of the data for each value of the parameters in the grid and store this value.  
+
+5. Decide on a prior and define it for each of the points in the grid.  
+
+6. Multiply the likelihood and the prior and the store this "raw posterior" value.  
+
+7. Normalize the raw posterior to get the posterior probability. 
+
+8. Take a break and bask in your success
+
+## Putting it into practice, globe tossing sequential data aqcuisition 
+Here we will do the globe tossing model from chapter 2 by updating our posterior distribution with one piece of data at a time. We will walk through each step of the algorithm. You may want to inspect the table as you are creating it to make sure you are understanding what the commands in R are doing. You can either type the name of the tibble in the console, or use the _view_ command.
+
+1. Let's write out our likelihood. It has one parameter, the probability of water, $p_w$. We could write
+$$
+\mathrm{Pr}(\mathrm{water} | p_w) = p_w 
+$$
+$$ 
+\mathrm{Pr}(\mathrm{land} | p_w) = 1- p_w
+$$
+  
+2. The only parameter in sight is $p_w$ which can be between 0 and 1. We may want to assume that values of exactly 0 or exactly 1 are not possible (i.e. our prior for values of 0 or 1 is vanishingly small).
+
+3. Our grid will be one-dimensional, with values ranging from 0 to 1. I'll do this by starting a tibble:
+
+```{r}
+posterior_table =tibble(p_w_proposed = seq(from=0, to = 1, by = 0.01) ) 
+```
+I'm calling this column `p_w_proposed` because I want to emphasize that this is not the value of $p_w$ used to generate the data. 
+
+4. Now we calculate our likelihood. We're going to set the value of `d_now` (for "data now") and pass this value to our likelihood function. I'll use the coding of 1 for water and 0 for land. Note there are lots of ways to do this, I am doing it right inside the mutate function itself. The trick here is to use the fact that `(1==1)` returns 1, while `1==0` returns 0. 
+
+```{r}
+d_now=1
+
+posterior_table <- mutate(posterior_table , likelihood = (d_now==1)*p_w_proposed + (d_now==0)*(1-p_w_proposed) )
+```
+
+
+5. We'll start with a uniform prior, meaning we believe all values of $p_w$ are equally likely. Because we are discretizing the prior density function, I'm going to go ahead and ensure that the probabilities add up to 1 by setting our prior probability to 1 divided by the number of points in our grid.
+
+Again we add this using mutate, and we use the fact that `n()` gives the number of elements in our grid.
+
+```{r}
+posterior_table <- mutate(posterior_table , prior=1/n())
+```
+
+You can check to see that the prior sums to 1 (this is required for all proper probability distributions):
+```{r}
+sum(posterior_table$prior)
+```
+
+
+
+6. Multiply the likelihood and the prior and the store this "raw posterior" value. Again `mutate` does the trick. 
+
+```{r}
+posterior_table <- mutate(posterior_table , raw_posterior = likelihood * prior)
+```
+
+
+
+7. Normalize the raw posterior to get the posterior probability. Check to see what it sums to:
+
+```{r}
+posterior_table <- mutate(posterior_table , posterior = raw_posterior/sum(raw_posterior))
+```
+
+Chec to see that we have normalized it successfully:
+```{r}
+sum(posterior_table$posterior)
+
+```
+
+
+
+8. Before you rest:  let's see what it looks like.
+
+```{r}
+ggplot(data=posterior_table, aes(x=p_w_proposed, y=posterior))+
+  geom_line(color="red")+
+  geom_line(aes(x=p_w_proposed, y=prior) , color="blue")
+```
+
+
+### Bayesian updating as new information arises
+Hope you had a good break! Now let's see how we can turn the crank over and over again.
+
+First, use the posterior you just generated as your new prior.
+```{r}
+posterior_table_next <- mutate(posterior_table , prior = posterior)
+```
+
+Decide what piece of data to add:
+```{r}
+d_now=0
+```
+
+Turn the crank on the Bayesian updating.  
+```{r}
+posterior_table_next <- mutate(posterior_table_next , likelihood= (d_now==1)*p_w_proposed +(d_now==0)*(1-p_w_proposed),
+                       raw_posterior = likelihood * prior , posterior = raw_posterior/sum(raw_posterior))
+
+```
+
+
+
+
+```{r}
+ggplot(data=posterior_table_next, aes(x=p_w_proposed, y=posterior))+
+  geom_line(color="red")+
+  geom_line(aes(x=p_w_proposed, y=prior) , color="blue")
+```
+
+
+## Continue updating with the full sequence given in the book
+We want to see what happens when we have a sequence of draws as listed in the book: W L W W W L W L W 
+
+Do this yourself by cutting and pasting the crank-turning code. Be sure to include the part where we take the posterior from the last iteration as the prior for the next. 
+
+
+
+First, use the posterior you just generated as your new prior.
+```{r}
+posterior_table_next <- mutate(posterior_table_next , prior = posterior)
+```
+
+Decide what piece of data to add:
+```{r}
+d_now=1
+```
+
+Turn the crank on the Bayesian updating.  
+```{r}
+posterior_table_next <- mutate(posterior_table_next , likelihood= (d_now==1)*p_w_proposed +(d_now==0)*(1-p_w_proposed),
+                       raw_posterior = likelihood * prior , posterior = raw_posterior/sum(raw_posterior))
+
+```
+
+
+
+
+```{r}
+ggplot(data=posterior_table_next, aes(x=p_w_proposed, y=posterior))+
+  geom_line(color="red")+
+  geom_line(aes(x=p_w_proposed, y=prior) , color="blue")
+```
+
+
+
+## Exercise: Change the order that you add W's and L's to the list. How does it change what you see in the posterior plots?
+

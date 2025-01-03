@@ -1,0 +1,86 @@
+---
+title: 'Day 2: Bayes Rule'
+author: "Stephen R. Proulx"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(rethinking)
+```
+
+# Understanding Bayes' Rule
+
+Goals for today:   
+* Learn the form of Bayes' Rule  
+* Develop an understanding of how the components of Bayes' Rule affect the posterior probability  
+* Launch the shiny app in R and manipulate the input   
+* Write out your interpretation of the calculation  
+
+
+
+
+
+
+
+## Bayes' Rule 
+The general form of Bayes' Rule is shown here:
+$$
+Pr(A|B) = \frac{Pr(B|A) Pr(A)}{Pr(B)}
+$$
+
+It gives as output the probability of event A given that we have observed event B. It takes as input the total probabilities of A and B, and the opposite conditional probability, that B happens given an observation of A. There are a lot of ways to think about how these pieces come together, and I have drawn some of them out in the additional file and on the chalkboard during class.
+
+Remember that a total probability can be found by summing the component conditional probabilities. 
+$$
+Pr(B) = \sum_{i} Pr(B|p_i) Pr(p_i)
+$$
+
+### Applied to cold/covid symptoms
+Here's a concrete example that we'll explore. 
+$$
+Pr(\mathrm{covid}|\mathrm{symptoms})= \frac{Pr(\mathrm{symptoms}|\mathrm{covid}) Pr(\mathrm{covid})}{Pr(\mathrm{symptoms})}
+$$
+
+### Symptoms and Cause
+
+$$
+Pr(\mathrm{covid}|\mathrm{symptoms})= \frac{Pr(\mathrm{symptoms}|\mathrm{covid}) Pr(\mathrm{covid})}{Pr(\mathrm{symptoms})}  
+$$
+Which we can refine a bit by noting that their are two routes to have symptoms, you have covid or you have the flu. (of course in reality there are more reasons to have symptoms, it could be allergies, or paranoia.... But for these calculations we assume only two routes.)
+
+$$
+Pr(\mathrm{covid}|\mathrm{symptoms})= \frac{Pr(\mathrm{symptoms}|\mathrm{covid}) Pr(\mathrm{covid})}{Pr(\mathrm{symptoms}|\mathrm{covid}) Pr(\mathrm{covid})+Pr(\mathrm{symptoms}|\mathrm{flu}) Pr(\mathrm{flu}) }
+$$
+
+
+If covid is rare, how likely is it that I have covid given that I have symptoms?
+$$
+Pr(\mathrm{covid}|\mathrm{symptoms})= \frac{ 0.3 * 0.001   }{ 0.3 * 0.001 + 1 * 0.02 } = 0.015 
+$$
+
+If covid is common, how likely is it that I have covid given that I have symptoms?
+$$
+Pr(\mathrm{covid}|\mathrm{symptoms})= \frac{ 0.3 * 0.1  }{0.3 * 0.1  + 1 * 0.02  } = 0.6
+$$
+
+### Breakout: explore the shiny app
+Use this link to start your VM: [https://bit.ly/EEMB174](https://bit.ly/EEMB174).  
+Add a directory to store your work. You will want to use the "export" function to save copies of your work on your own computer.
+
+Navigate to the "In Class Material" folder and find today's date. Click on the file "app.R". Once it is loaded into the code tab you can run this shiny app by pressing the "Run App" button.
+
+
+
+### One final note:
+Here we considered a situation where someone has flu-like symptoms, and wants to estimate the chances that the symptoms are due to covid. We see that the frequency of both flu and covid in the population as a whole has a ``surprising'' effect on the caclulations. This is very hard to accept based on most of the mathemtatical training you have recieved before. But it is true.
+
+We did this example thinking about symptoms, but it is exactly the same problem if we look at tests for the presence of covid. Just replace "has sypmtoms" with "has a positive test result". If people who do not have covid can possibly test positive, and people who do can possibly test negative, then we have the same exact equation, just with different names for the categories. 
+
+This was why, in the early covid days when antibody testing was being used to assess covid prevalence in the population, there was a strong cautionary warning that testing positive did not mean that you had covid, even when the chance of a false positive of the test was low. When almost no one has had covid, almost every postive antibody test is due to a false positive!
+
+
+ ![xkcd https://xkcd.com/2563/](throat_and_nasal_passages.png)
+ 
