@@ -31,7 +31,7 @@ $$
 Pr(A|B) = \frac{Pr(B|A) Pr(A)}{Pr(B)}
 $$
 
-It gives as output the probability of event A given that we have observed event B. It takes as input the total probabilities of A and B, and the opposite conditional probability, that B happens given an observation of A. There are a lot of ways to think about how these pieces come together, and I have drawn some of them out in the additional file and on the chalkboard during class.
+It gives as output the probability of event A given that we have observed event B. It takes as input the total probabilities of A and B, and the opposite conditional probability, that B happens given an observation of A. There are a lot of ways to think about how these pieces come together, and I have drawn some of them out in the additional file and on the board during class.
 
 Remember that a total probability can be found by summing the component conditional probabilities. 
 $$
@@ -56,15 +56,29 @@ Pr(\mathrm{covid}|\mathrm{symptoms})= \frac{Pr(\mathrm{symptoms}|\mathrm{covid})
 $$
 
 
+Some example probabilities for rare covid:
+$$
+Pr(\mathrm{symptoms}|\mathrm{covid}) = 0.3 \\
+Pr(\mathrm{covid}) = 0.001  \\
+Pr(\mathrm{symptoms}|\mathrm{flu}) = 1 \\
+Pr(\mathrm{flu})  =0.02
+$$
+
 If covid is rare, how likely is it that I have covid given that I have symptoms?
 $$
 Pr(\mathrm{covid}|\mathrm{symptoms})= \frac{ 0.3 * 0.001   }{ 0.3 * 0.001 + 1 * 0.02 } = 0.015 
 $$
 
+
+Now consider if covid is quite common:
+$$
+Pr(\mathrm{covid}) = 0.1  
+$$
 If covid is common, how likely is it that I have covid given that I have symptoms?
 $$
 Pr(\mathrm{covid}|\mathrm{symptoms})= \frac{ 0.3 * 0.1  }{0.3 * 0.1  + 1 * 0.02  } = 0.6
 $$
+
 
 ### Breakout: explore the shiny app
 Use this link to start your VM: [https://bit.ly/EEMB174](https://bit.ly/EEMB174).  
