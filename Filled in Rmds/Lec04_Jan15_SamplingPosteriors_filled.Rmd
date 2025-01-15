@@ -63,7 +63,26 @@ This additional useful piece of code to describe the binomial likelihood:
 `likelihood = dbinom(numW,size=numT,prob=p_w_proposed)`
 where you will need to replace `numT` with the number of times the globe has been tossed and `numW` with the number of times it came up W.
 
+```{r}
+posterior_table =tibble(p_w_proposed = seq(from=0, to = 1, by = 0.01) ) 
 
+```
+
+```{r}
+numW=6
+numL=3
+numT=numW+numL
+
+posterior_table <- mutate(posterior_table , likelihood =dbinom(numW, size=numT, prob=p_w_proposed) ,
+                          prior=1/n(),
+                          raw_posterior = likelihood * prior , 
+                          posterior = raw_posterior/sum(raw_posterior))
+
+
+ggplot(data=posterior_table, aes(x=p_w_proposed, y=posterior))+
+  geom_line(color="red")+
+  geom_line(aes(x=p_w_proposed, y=prior) , color="blue")
+```
 
 
 ## Methods of sampling distributions  
@@ -180,12 +199,18 @@ samples_globe_tossing <- INSERT CODE HERE TO SAMPLE THE POSTERIOR %>%
   select(p_w_proposed)
 ```
 
+```{r}
+samples_globe_tossing <-  sample_n(posterior_table, weight =posterior, size=1e4, replace=TRUE) %>%
+  select(p_w_proposed) %>%view()
+```
 
 We can quantify the distribution, and see that the mean and median are close to the 2/3 that was observed. 
 ```{r}
 (globe_toss_stats <- INSERT CODE HERE TO CREATE THE DISTRIBUTION SUMMARY)
 ```
-
+```{r}
+(globe_toss_stats <- dist_quant(samples_globe_tossing$p_w_proposed))
+```
 
 
 
