@@ -1,0 +1,245 @@
+---
+title: 'Day 5: Intro to Linear Regression'
+author: "Stephen R. Proulx"
+date: "1/22/2025    "
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+    keep_md: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(rethinking)
+
+source("../helper.R")   
+```
+
+# Today's objectives:  
+
+* Learn the notation for describing Bayesian statistical models  
+* Writing likelihoods for multiple observations of data  
+* Simulating from a prior 
+* grid approximation with 2 parameters  
+* Calculating on the log scale
+
+
+## Notation
+
+1. Start with your likelihood. Usually this is a single line, but in rare cases (like if there are multiple types of data), it could be more. You can tell a line is part of the likelihood if it has *both* data and parameters in it.  
+
+
+In RMarkdown we can use $\LaTeX$ to typeset equations. A nice intro to $\LaTeX$ is here: https://www.overleaf.com/learn/latex/Learn_LaTeX_in_30_minutes .
+
+I'll recreate the description on page 77. 
+We start typesetting a $\LaTeX$ equation with the "\$\$" symbol. The symbol "~" can be generated with the `\sim` command: 
+$$
+y_i \sim \mathrm{Normal}(\mu_i, \sigma)
+$$
+Math symbols in greek are generally produced with `\lettername`. 
+
+2.  Next we put in any "transformations", which are sometimes called "link" functions.  You can tell that a line is one of the transformations because it only involves parameters (but including hyper-parameters), not data, and because it does not involve a probability density (or the symbol $\sim$)  
+
+$$
+\mu_i  = \beta  \gamma_i
+$$
+3.  And then then all the priors. Each true parameter has a prior. How do you know it is a "true" parameter? Because it has a prior. The priors are all probability statements, so they have the symbol $\sim$, and they no not involved the data.  
+$$
+\beta \sim \mathrm{Normal}(0,10) \\
+\sigma  \sim \mathrm{Exponential}(1)\\
+\gamma_i \sim \mathrm{Normal}(0,1)
+$$
+
+
+## Height data, mean and variance
+Here we will go through the example in the book that fits human height data using a normal likelihood function. Because normal distributions have both a mean and standard deviation, this is a two parameter model, so a grid approximation will really be a grid this time. 
+
+Load Kalahari forager dataset:
+```{r loadData}
+data("Howell1")
+d<-Howell1
+d2<- d%>% filter(age>=18)
+ggplot(data=d2, aes(x=height)) + geom_histogram(binwidth = 2.5)
+```
+
+The model described in the book which we will fit:
+$$
+y_i \sim \mathrm{Normal}(\mu, \sigma)\\
+\mu \sim \mathrm{Normal}(178,20)\\
+\sigma \sim \mathrm{Uniform}(0,50) 
+
+$$
+
+A first important question is, what does the likelihood function really mean, and why is it a good choice for this model? When we write 
+$$
+y_i \sim \mathrm{Normal}(\mu, \sigma)\\
+$$
+what is actually meant is:
+$$
+Pr(\mathrm{data|parmeters}) = \prod PDF(\mathrm{Normal}(\mu , \sigma),y_i)
+$$
+This means that to get the likelihood of a dataset that involves multiple observations (which we label $\y_i$), we are multiplying together the likelihood of each individual datapoint. This is because we are assuming that each height is independent of each other, and the joint probability of independent events is the product of their probabilities. 
+
+An additional important point is that we can work with probabilities after converting to the log scale, which converts products into sums, and then convert back to the natural scale. This is largely a computational trick done in the software behind the scenes. If we don't do this, we end up multiplying a bunch of really small numbers together which creates tiny numbers that tend to look like zero to a computer. If we have converted to the log scale then we are adding up a bunch of negative numbers that are not near zero. 
+
+
+
+### Prior predictive simulation of height data
+It can be very useful to first see what sort of data, in broad terms, your priors will produce. If they are producing absurd values, you might instead decide that your prior knowledge allows you to exclude those parameters. This would tell you that you should try using a more narrow (i.e. informative) prior.  
+
+Here we apply the prior by drawing values for $\mu$ and $\sigma$, that is how the prior allows us to get parameter values. The actual height values are then drawn from a normally distribution with the mean and variance specified by the parameters.  
+```{r}
+samps=10e4
+prior_sim <- tibble( mu=rnorm(samps,mean=178,sd=20), sigma=runif(samps,min=0,max=50)) %>%
+  mutate(y=rnorm(n(),mean=mu,sd=sigma)) 
+```
+
+Let's visualize it. It will be an over-dispersed normal, because we have variance in the parameters and the normal sampling variability.
+```{r}
+ggplot(data=prior_sim, aes(x=y))+ geom_density()
+```
+
+
+### Grid approximation of the posterior
+Now we can do a grid approximation to generate the posterior, and in this case we actually have two parameters so we actually have a grid. 
+
+In terms of coding, the trick here is to use `expand` to produce all combinations of two columns.
+
+Note: If you have experience programming, you could also do this by doing a loop-within-a-loop. An inner loop over `sigma` values and an outer loop over `mu` values.
+
+
+```{r grid_posterior_setup}
+#code to grid out the posterior
+
+n <- 20 # how many steps to use in the grid.  
+
+d_grid <-
+  tibble(mu    = seq(from = 150, to = 160, length.out = n),
+         sigma = seq(from = 4,   to = 9,   length.out = n)) %>% 
+  # expand can be used to combine all the elements from two rows
+  expand(mu, sigma)
+```
+
+
+Have a quick look at the grid to see how it worked. 
+```{r }
+view(d_grid)
+```
+
+We set this up with a very coarse grid, so you could look at the table and easily read it. We'll want a finer scale grid to do our calculations, so go back and set `n=200` and re run the code chunk.
+
+We need to write a special function to calculate our likelihood. This function takes as input the values of $\mu$ and $\sigma$ that we are considering. It also needs to use the data, in our case still stored in the dataframe `d2`.  
+
+We code this by summing up the log likelihoods
+
+```{r define_like_function}
+height_lik_f <- function(mu_input,sigma_input){
+  sum(dnorm(
+  d2$height , 
+  mean=mu_input,
+  sd=sigma_input,
+  log=TRUE ))
+}
+```
+Have a close look at this function, what does it do? It adds up the log-likelihood values, which is equivalent to multiplying the raw likelihood values, for each observation of height. 
+
+And we convert this to a "vectorized" function so we can use it in `dplyr` functions.
+```{r vectorize}
+height_lik_f_vec <- Vectorize(height_lik_f)
+```
+
+
+
+Repeat your mantra: likelihood * prior and then normalize! This time we do it on the log scale and then convert back to the natural scale.  
+
+Break up into pairs to program this filling in the YOURCODEHERE portions
+```{r grid_posterior_execution}
+posterior_table <- d_grid %>%
+  mutate(log_likelihood=height_lik_f_vec(mu,sigma),
+         log_prior_mu = dnorm(mu,mean=178,sd=20,log=TRUE), # Our prior is a formula based on a normal distribution with mean = 178 and sd = 20. You can use the dnorm function with log=TRUE to produce log probabilities.
+         log_prior_sigma = dunif(sigma,min=0,max=50,log=TRUE), #Our prior for sigma is a uniform distribution between 0 and 50. dunif works here, again log=TRUE
+         raw_log_posterior = log_likelihood + log_prior_mu + log_prior_sigma, # Raw posterior is the likelihood * prior. Here we have two parameters, we need to multiply their independent probabilities together. Because we are working on the log scale, we add the log values together 
+         log_posterior = raw_log_posterior - max(raw_log_posterior) , # this is just a trick to keep from having super low values when we un-log things.
+         raw_posterior = exp(log_posterior), # un-log things, i.e. exp()
+         posterior = raw_posterior/sum(raw_posterior))  #finally we normalize
+```
+
+Now- look at the object you have created, what does it mean? (I zoomed into the region of most interest with the filter command)
+```{r}
+view(filter(posterior_table, mu>154 , mu<156, sigma>7.5,sigma<8.5))
+```
+
+
+### Exploring the posterior probability
+
+We can view the posterior probability, which has parameters in two dimensions, using a contour plot. This figure uses the calculated probabilities, not samples from the posterior distribution. Because it uses the exact probabilities, it will appear more smooth. 
+```{r view_posterior}
+
+contour2_xyz(posterior_table$mu, posterior_table$sigma , posterior_table$posterior)  
+
+```
+
+
+We sample from the posterior in exactly the same way as before. Each row of our dataframe contains values for both $\mu$ and $\sigma$. We'll use `sample_n` and collect 10,000 samples. 
+```{r}
+samples_height_model <- sample_n(posterior_table,size=1e4,weight=posterior,replace = TRUE) %>% # sample from your grid approximation posterior
+  select(mu,sigma)
+```
+
+We can view a summary with the `precis` command. This gives a table with means and quantiles, and also a chunky little histogram. 
+```{r}
+precis(samples_height_model)
+```
+
+
+Now that we have samples, we can visualize them in a number of ways. 
+
+We can look at the scatter plot of the points themselves. This is a fine thing to glance at.
+```{r}
+ggplot(data=samples_height_model, aes(x=mu,y=sigma)) + 
+  geom_jitter(width=0.1,height=0.03,alpha=0.1)+
+  scale_x_continuous(limits = c(153,156.5),breaks=seq(from=153,to=156,by=1),labels=c("153.0","154.0","155.0","156.0"))+
+  scale_y_continuous(limits = c(6.5,9.0), breaks=seq(from =7,to=9,by=0.5))
+
+```
+
+
+We can also view a contour plot of the samples. Because this is from the samples, and not the exact probabilities, it will look messier. If you re-sample you will get a slightly different plot.
+```{r}
+
+ggplot(data=samples_height_model, aes(mu, sigma)) +
+  geom_density_2d(h=1.5) +
+  lims(x=c(150,160),y=c(2,9))
+```
+
+### Comparing the marginal plots
+What do the "marginal" densities mean? They tell us how one parameter is distributed if we don't know (or really if we don't consider) the value of the other parameters. 
+
+From samples, we can get them from our samples without any real work by just focusing on one parameter at a time. This code produces to graphs, you have to click on the output pane you wish to view. 
+```{r}
+ggplot(data=samples_height_model, aes(x=mu)) + 
+  geom_density(bw=.3) 
+
+ggplot(data=samples_height_model, aes(x=sigma)) + 
+  geom_density(bw=.3) 
+
+```
+
+
+Lots of packages have methods for plotting samples from posteriors. One common method is some kind of "pair" plot, which combines a scatter plot of each pair of parameters and a marginal density plot of each individual parameter. We'll use the `bayesplot` package version, with some specific options that make it look nicer. 
+
+```{r}
+bayesplot::mcmc_pairs(samples_height_model,diag_fun = "dens",
+  off_diag_fun =  "hex") 
+
+```
+
+
+
+### Exercise: Quantify the distributions
+All of the methods we've used for quantifying a single paremeter's posterior distribution can still be used in the same way as before. For both $\mu$ and $\sigma$, calculate the mean, median, 5 and 95% quantiles, and the HPDIs. 
+
+
