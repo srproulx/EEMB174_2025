@@ -1,0 +1,643 @@
+---
+title: 'Day 5: Intro to Linear Regression'
+author: "Stephen R. Proulx"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(rethinking)
+source("../helper.R")
+
+```
+
+# Today's objectives:  
+
+* Learn how to write notation for a linear regression type of model  
+* Learn how to use the "quadratic approximation" to calculate a posterior distribution   
+* Do a linear regression  
+* Plot samples and simulations from the posterior distribution   
+
+
+
+
+
+## Height data, mean and variance
+Here we will go through the example in the book that fits human height data using a normal likelihood function. Because normal distributions have both a mean and standard deviation, this is a two parameter model, so a grid approximation will really be a grid this time. 
+
+
+Load the Kalahari forager height dataset:
+```{r loadData}
+data("Howell1")
+d<-Howell1
+d2<- as_tibble(d)%>% filter(age>=18)
+
+
+(data_plot <- ggplot(data=d2, aes(x=weight,y=height)) + 
+  geom_point() +
+  xlim(25,70)+
+  ylim(120,200))
+```
+ 
+
+## Introduciton to quap: Quadratic Approximation
+We're going to treat this mostly as a black box that we will use on our way to generating samples from a posterior distribution with MCMC methods. The quadratic approximation requires that we be able to calculated the posterior probability for specific values of our parameters, and then searches for the top of the posterior probability hill. Once it gets there, it just figures out how curved the hill top is and then approximates the entire posterior distribution from that.
+
+For our purposes we need:  
+1. To learn the syntax for calling `quap`   
+2. To recognize error messages  
+3. To create a dataframe with samples of parameters from the `quap` approximation.  
+
+### quap syntax
+Here we recreate the model that we used for grid approximation of the height data. The syntax involves making an `alist` that is our model description, and defining the data with `data=`. Note that each line in the `alist` must have a `,` to end with.
+
+Possible entries in the `alist` include the likelihood:
+$$
+data \sim \mathrm{likelihood}(parameters)
+$$
+Transformations among parameters. These use the R `<-` assignment, not `=` : 
+$$
+parameter_1 \leftarrow \mathrm{transformation}(parameter_2)
+$$
+
+And priors:
+$$
+parameter_i \sim \mathrm{prior}
+$$
+The order of the equations in the model matters. You need to list the likelihood, then the transformations, and then the priors. 
+
+So our height model is:
+```{r}
+quap_model_height <- quap(
+    alist(
+        height ~ dnorm( mu , sigma ) ,
+        #transformations would go here, but we don't have any. yet....
+        mu ~ dnorm( 178 , 20 ) ,
+        sigma ~ dunif( 0 , 50 ) 
+    ) , data=d2 )
+
+```
+It runs and returns no errors. We can see the summary with 
+```{r}
+precis(quap_model_height)
+```
+Which should look pretty familiar. 
+
+
+
+### quap errors
+`quap` does a simple hill climbing procedure, and like anyone looking closely at a topo map, it can easily wander off and get lost. Errors usually have to do with the random starting position on the map leading off to nowhere, or that it takes too many steps without getting to a flat area and gives up (this is by design, so you don't have a function that never stops running).
+
+
+Here I've set a unreasonable prior that causes the likelihood to be so small and cause numerical errors.
+```{r}
+quap_model_height_bad_prior <- quap(
+    alist(
+        height ~ dnorm( mu , sigma ) ,
+        mu ~ dnorm( 100 ,0.1) ,
+        sigma ~ dunif( 0 , 50 ) 
+    ) , data=d2 )
+
+```
+
+Let's run it again with more reasonable priors
+```{r}
+quap_model_height_bad_prior <- quap(
+    alist(
+        height ~ dnorm( mu , sigma ) ,
+        mu ~ dnorm( 120 ,5) ,
+        sigma ~ dunif( 0 , 50 ) 
+    ) , data=d2 )
+
+```
+
+### Extracting samples
+The `quap` command returns a posterior distribution which is represented by a formula for a quadratic function, but we want to have samples from that posterior that we can use. Fortunately, the rethinking command `extract.samples` does exactly what we need. 
+```{r}
+(samples_height_model <- extract.samples(quap_model_height,n=1e4) %>% 
+  as_tibble() )
+```
+
+And these samples can now be worked with as before, and give the same results (up to random noise).
+```{r}
+bayesplot::mcmc_pairs(samples_height_model,diag_fun = "dens",
+  off_diag_fun =  "hex") 
+
+```
+
+
+## A linear regression model
+Now we are going to do a linear regression
+
+$$
+y_i \sim \mathrm{Normal}(\mu, \sigma)\\
+\mu_i  = a +b*weight_i \\
+a \sim \mathrm{Normal}(178,20)\\
+b \sim \mathrm{Normal}(178,20)\\
+\sigma \sim \mathrm{Uniform}(0,50) 
+$$
+
+
+```{r}
+
+quap_model_height_weight <- quap(
+    alist(
+        height ~ dnorm( mu , sigma ) ,
+        mu <- a + b*( weight  ) ,
+#prior for a, just act like it is height without a linear regression
+#prior for the slope- try log-normal with parameters 0 and 1.
+        sigma ~ dunif( 0 , 50 )
+    ) , data=d2 )
+```
+```{r}
+
+quap_model_height_weight <- quap(
+    alist(
+        height ~ dnorm( mu , sigma ) ,
+        mu <- a + b*( weight  ) ,
+        a ~ dnorm( 178 , 20 ) ,
+        b ~ dlnorm( 0 , 1 ) ,
+        sigma ~ dunif( 0 , 50 )
+    ) , data=d2 )
+```
+
+
+
+### common quap errors: 
+aka can you spot the difference....
+```{r}
+
+quap_model_height_weight <- quap(
+    alist(
+        height = dnorm( mu , sigma ) ,
+        mu <- a + b*( weight  ) ,
+        a ~ dnorm( 178 , 20 ) ,
+        b ~ dlnorm( 0 , 1 ) ,
+        sigma ~ dunif( 0 , 50 )
+    ) , data=d2 )
+```
+(= instead of ~)
+
+
+```{r}
+
+quap_model_height_weight <- quap(
+    alist(
+        height ~ rnorm( mu , sigma ) ,
+        mu <- a + b*( weight  ) ,
+        a ~ dnorm( 178 , 20 ) ,
+        b ~ dlnorm( 0 , 1 ) ,
+        sigma ~ dunif( 0 , 50 )
+    ) , data=d2 )
+```
+(rnorm instead of dnorm)
+
+
+```{r}
+
+quap_model_height_weight <- quap(
+    alist(
+        height ~ dnorm( mu , sigma ) ,
+        mu <- a + b*( weight  ) ,
+        a ~ dnorm( 178 , 20 ) ,
+        sigma ~ dunif( 0 , 50 )
+    ) , data=d2 )
+```
+(no prior for b)
+
+
+```{r}
+
+quap_model_height_weight <- quap(
+    alist(
+        height ~ dnorm( mu , sigma ) ,
+        mu = a + b*( weight  ) ,
+        a ~ dnorm( 178 , 20 ) ,
+        b ~ dlnorm( 0 , 1 ) ,
+        sigma ~ dunif( 0 , 50 )
+    ) , data=d2 )
+```
+(= instead of <- for transformation )
+
+```{r}
+
+quap_model_height_weight <- quap(
+    alist(
+        height ~ dnorm( mu , sigma ) ,
+        mu <- a + b*( weight  ) ,
+        a ~ dnorm( 178 , 20 ) ,
+        b ~ dlnorm( 0 , 1 ) ,
+        sigma ~ dunif( 0 , 50 )
+    )  )
+```
+(forgot to specify to data)
+
+```{r}
+
+quap_model_height_weight <- quap(
+    alist(
+        height ~ dnorm( predicter , sigma ) ,
+        mu <- a + b*( weight  ) ,
+        a ~ dnorm( 178 , 20 ) ,
+        b ~ dlnorm( 0 , 1 ) ,
+        sigma ~ dunif( 0 , 50 )
+    ), data=d2)
+```
+(Used a different name for the predictor in the likelihood and the transformation)
+
+### Back to the correct model
+Now run the correct quap model and look at the output-
+
+```{r}
+precis(quap_model_height_weight)
+```
+
+
+```{r}
+(samples_height_weight_model <- extract.samples(quap_model_height_weight,n=1e4) %>% 
+  as_tibble() )
+```
+
+
+```{r}
+bayesplot::mcmc_pairs(samples_height_weight_model,diag_fun = "dens",
+  off_diag_fun =  "hex") 
+```
+
+
+
+### Plotting the linear fits
+Let's see how our model fits compare with the data
+```{r}
+
+subsamples <-sample_n(samples_height_weight_model,size=10) 
+
+data_plot +
+  geom_abline(intercept = subsamples$a, slope = subsamples$b, alpha=0.5, color="red")
+```
+
+
+
+
+### Using the rethinking package functions `link` and `sim`
+We'll actually be using the functions `link_df` and `sim_df`. These use the rethinking package functions `link` and `sim`, but do some extra work to return a neat dataframe that you can then plot or summarise. I wrote the wrapper function, it is included in the file "helper.R". Since I wrote these they have not been extensively tested, and this means they may fail if you use them in an unanticipated way.  
+
+
+
+using link: When we generate samples from `quap` they are samples of the parameters, which in this case are the intercept `a` and slope, `b`. We often want to reverse our transformation formula to get results in terms of the parameters that go into the likelihood themselves. In this case, that means `mu`. So using `link_df` will give us samples in terms of `mu`. 
+
+We need to supply `link_df` with a quap model and with a set of input values. So we make a dataframe of the values of body weight that we want to get output for.
+
+Here we look at weights from 25 to 70.
+
+```{r}
+weights<-tibble(weight=seq(from=25, to=70, by=1))
+samples_height_weight_mu <- link_df(quap_model_height_weight,data=weights , n=100) %>%view()
+```
+
+The output is values of height for each weight we included in our tibble, which is replicated 100 times for each weight we looked at. In the output tibble you see a column "index" which tells you which row of the input tibble it came from.
+
+
+We are now going to plot the upper and lower 0.1 probable intervals of the mean height (as a function of weight). The blue ribbon shows this. 
+```{r}
+samples_summarized <- samples_height_weight_mu %>%
+  group_by(weight)%>%
+  summarise(mean_mu=mean(mu),
+            lower_mu=quantile(mu,0.1),
+            upper_mu=quantile(mu,0.9))%>%
+  ungroup()
+
+(data_plot_means=data_plot +
+  geom_ribbon(data=samples_summarized, inherit.aes = FALSE, aes(x=weight, ymin=lower_mu,ymax=upper_mu),fill="blue",alpha=.5))
+```
+
+
+
+Using sim:
+`sim_df` is similar to `link_df`, but outputs simulated data instead of the sampled parameters. This means the results are drawn from the likelihood distribution itself. 
+
+```{r}
+weights=tibble(weight=seq(from=25,to=70,by=5))
+simulated_height_weight <- sim_df(quap_model_height_weight,data=weights)
+```
+
+
+
+Now we are adding a ribbon with the sampled values. This ribbon is wider than the one for the means, because it has the variance we got for the means plus the variance from sampling from the normal likelihood function.
+```{r}
+simulations_summarized <- simulated_height_weight %>%
+  group_by(weight)%>%
+  summarise(mean_height=mean(height),
+            lower_height=quantile(height,0.1),
+            upper_height=quantile(height,0.9))%>%
+  ungroup()
+
+data_plot_means +
+  geom_ribbon(data=simulations_summarized, inherit.aes = FALSE, aes(x=weight, ymin=lower_height,ymax=upper_height),fill="blue",alpha=.5)
+```
+
+
+
+## Centered predictors for the linear regression model
+Now we will re-do the same analysis, but with a "centered" description of the weight data. This helps make the parameters of the linear model make more sense. 
+
+To start, add a column to your dataframe which is the weight of the observed individual minus the mean weight in the population as a whole.
+```{r}
+d2 <- mutate(d2, centered_weight = weight - mean(weight))
+```
+
+
+
+
+Now perform a `quap` model of the data, but using your new centered weight column as the linear model predictor. Give the new model a new name, `quap_model_height_weight_centered`.
+
+```{r}
+
+quap_model_height_weight_centered <- quap(
+    alist(
+        height ~ dnorm( mu , sigma ) ,
+        mu <- a + b*( centered_weight  ) ,
+        a ~ dnorm( 178 , 20 ) ,
+        b ~ dnorm( 0 , 1 ) ,
+        sigma ~ dunif( 0 , 50 )
+    ) , data=d2 )
+```
+```{r}
+
+```
+
+```{r}
+precis(quap_model_height_weight_centered)
+```
+
+
+Now sample from the posterior to get a list of parameter values
+
+
+```{r}
+(samples_quap_model_height_weight_centered <- extract.samples(quap_model_height_weight_centered,n=1e4) %>% 
+  as_tibble() )
+```
+
+
+
+Create the paired plot and compare to what we saw for the un-centered data.
+
+```{r}
+bayesplot::mcmc_pairs(samples_quap_model_height_weight_centered,diag_fun = "dens",
+  off_diag_fun =  "hex") 
+```
+
+
+
+
+Plot some of the lines that are part of your sample. Be sure to plot the data with the centered weight as the x axis to compare the data to the prediction lines.
+
+
+First plot the data but use the centered weight as the x-axis
+```{r}
+data_plot_centered <- ggplot(data=d2, aes(x=centered_weight,y=height)) + 
+  geom_point() +
+  xlim(-25,25)+
+  ylim(120,200)
+```
+
+
+Now get the 10 samples from the posterior and add them to the plot
+```{r}
+subsamples <-sample_n(samples_quap_model_height_weight_centered,size=10)
+
+data_plot_centered +
+  geom_abline(intercept = subsamples$a, slope = subsamples$b, alpha=0.5, color="red")
+```
+
+It should look pretty much the same as our uncentered graph above.
+
+
+
+
+Use `link_df` and `sim_df` to create samples of the mean and to simulate from the posterior, and create a figure putting them all together. 
+
+
+We are using the `centered_weight` now, so this goes from -25 to +25. Create a tibble of weights and use `link_df` to find the posterior distribution for the `mu` parameter
+
+```{r}
+weights<-tibble(centered_weight=seq(from=-25, to=25, by=1),age=40)
+samples_height_weight_mu_centered <- link_df(quap_model_height_weight_centered,data=weights , n=100)
+```
+
+
+
+
+Now that you have the samples for `mu`, we can find the 0.1 and 0.9 quantiles for each value of `centered_weight` in our posterior sample dataset. 
+
+
+```{r}
+samples_summarized_centered <- samples_height_weight_mu_centered %>%
+  group_by(centered_weight)%>%
+  summarise(mean_mu=mean(mu),
+            lower_mu=quantile(mu,0.1),
+            upper_mu=quantile(mu,0.9))%>%
+  ungroup()
+```
+
+
+
+And now plot the data long with a `geom_ribbon` for the quantiles. 
+
+```{r}
+(data_plot_means_centered=data_plot_centered +
+  geom_ribbon(data=samples_summarized_centered, inherit.aes = FALSE, aes(x=centered_weight, ymin=lower_mu,ymax=upper_mu),fill="blue",alpha=.5) )
+```
+
+
+
+
+Now do the same but using `sim_df` to simulate data:
+
+```{r}
+
+weights<-tibble(centered_weight=seq(from=-25, to=25, by=5),age=40)
+simulated_height_weight_centered <- sim_df(quap_model_height_weight_centered,data=weights )
+
+```
+
+
+
+```{r}
+simulations_summarized_centered <- simulated_height_weight_centered %>%
+  group_by(centered_weight)%>%
+  summarise(mean_height=mean(height),
+            lower_height=quantile(height,0.1),
+            upper_height=quantile(height,0.9))%>%
+  ungroup()
+
+data_plot_means_centered +
+  geom_ribbon(data=simulations_summarized_centered, inherit.aes = FALSE, aes(x=centered_weight, ymin=lower_height,ymax=upper_height),fill="blue",alpha=.5)
+```
+
+
+
+# Exercise
+Compare the sampled value of mu for the un-centered and centered models. The average value for height, for each weight, is contained in the dataframe samples_summarized for the un-centered model and samples_summarized_centered for the centered model. In order to plot these two results on the same graph we need to shift their x-axis values. Try and produce a graph with the mean heights as a function of weight for both models- you should see that they are virtually identical.
+
+
+
+ Produce the summarized version of the posterior for the centered model, and add a column to record which model this is from.
+```{r}
+samples_summarized_centered <- mutate(samples_summarized_centered,weight=centered_weight + mean(d2$weight),model="centered")
+```
+
+We already have the summarized table for the regular model. We need to add a column to tell us which model it is from.
+```{r}
+samples_summarized <- mutate(samples_summarized,model="uncentered")
+```
+
+Combine the two datasets by using all of the rows from each dataframe.
+```{r}
+combinded_summary <- bind_rows(samples_summarized_centered,samples_summarized)
+```
+
+Plot them on the same graph, using color to distinguish between the two models. 
+```{r}
+ggplot(combinded_summary, aes(x=weight,y=mean_mu,color=model))+geom_line()
+
+```
+
+
+
+
+# alterntive method for plotting uncertainty in the esitmates and posterior simulations
+You do not need to use this section, I just put it in to show you how to generate the figures without using the `link` and `sim` functions.
+
+
+First add the weights to our dataframe of parameters sampled from the posterior. We make a list of the weights we want repeated a bunch of times so that each sample is paired with a random weight from our list of weights to include. We then use mutate to calculate the `mu` value for each sample and weight using the linear model based on the parameters `a` and `b`. Then we draw a normal variable with mean `mu` and sd `sigma`. 
+```{r}
+weights <- tibble(weight=rep(seq(from=25 , to = 70 , by=5),1e5))
+  
+
+samples_height_weight_model_alt <-bind_cols(samples_height_weight_model,slice(weights,1:(nrow(samples_height_weight_model)))) %>%
+  mutate(mu=a+b*weight,
+         height_ran = rnorm(n(),mu,sigma))
+```
+
+
+Next we summarize the `mu` and `height_ran` values
+```{r}
+samples_summarized <- samples_height_weight_model_alt %>%
+  group_by(weight)%>%
+  summarise(mean_mu=mean(mu),
+            lower_mu=quantile(mu,0.1),
+            upper_mu=quantile(mu,0.9),
+            mean_draw=mean(height_ran),
+            lower_draw=quantile(height_ran,0.1),
+            upper_draw=quantile(height_ran,0.9))%>%
+  ungroup()
+ 
+```
+
+
+And use ribbon plot as before. 
+```{r}
+data_plot +
+  geom_ribbon(data=samples_summarized, inherit.aes = FALSE, aes(x=weight, ymin=lower_mu,ymax=upper_mu),fill="blue",alpha=.5)+
+  geom_ribbon(data=samples_summarized, inherit.aes = FALSE, aes(x=weight, ymin=lower_draw,ymax=upper_draw),fill="blue",alpha=.5)
+```
+
+
+
+
+# Grid Approximation version of Linear Regression
+
+```{r grid_posterior_setup}
+#code to grid out the posterior
+
+n <- 60 # how many steps to use in the grid.  
+
+d_grid <-
+  tibble(alpha = seq(from = 108, to = 128, length.out = n),
+         beta = seq(from = 0.5, to = 1.5, length.out = n),
+         sigma = seq(from = 4,   to = 6,   length.out = n)) %>% 
+  # expand can be used to combine all the elements from two rows
+  expand(alpha,beta, sigma)
+```
+
+
+function to calculate likelihoods:
+
+```{r define_like_function}
+lin_reg_height_lik_f <- function(alpha_input, beta_input,sigma_input){
+  sum(dnorm(
+  d2$height , 
+  mean=alpha_input+beta_input*d2$weight,
+  sd=sigma_input,
+  log=TRUE ))
+}
+```
+
+
+And we convert this to a "vectorized" function so we can use it in `dplyr` functions.
+```{r vectorize}
+lin_reg_height_lik_f_vec <- Vectorize(lin_reg_height_lik_f)
+```
+
+
+
+Repeat your mantra: likelihood * prior and then normalize! This time we do it on the log scale and then convert back to the natural scale.  
+
+
+```{r grid_posterior_execution}
+posterior_table <- d_grid %>%
+  mutate(log_likelihood=lin_reg_height_lik_f_vec(alpha,beta,sigma),
+         log_prior_alpha = dnorm(alpha,mean=0,sd=50,log=TRUE), # Our prior is alpha formula based on a normal distribution with mean = 0 and sd = 50 You can use the dnorm function with log=TRUE to produce log probabilities.
+         log_prior_beta = dnorm(beta,mean=0,sd=5,log=TRUE), # Our prior is beta formula based on a normal distribution with mean = 0 and sd = 5 You can use the dnorm function with log=TRUE to produce log probabilities.
+         log_prior_sigma = dunif(sigma,min=0,max=50,log=TRUE), #Our prior for sigma is a uniform distribution between 0 and 50. dunif works here, again log=TRUE
+         raw_log_posterior = log_likelihood + log_prior_alpha+log_prior_beta + log_prior_sigma, # Raw posterior is the likelihood * prior. Here we have two parameters, we need to multiply their independent probabilities together. Because we are working on the log scale, we add the log values together 
+         log_posterior = raw_log_posterior - max(raw_log_posterior) , # this is just a trick to keep from having super low values when we un-log things.
+         raw_posterior = exp(log_posterior), # un-log things, i.e. exp()
+         posterior = raw_posterior/sum(raw_posterior))  #finally we normalize
+
+```
+
+
+ We'll use `sample_n` and collect 10,000 samples. 
+```{r}
+samples_lin_reg_model <- sample_n(posterior_table,size=1e4,weight=posterior,replace = TRUE) %>% # sample from your grid approximation posterior
+  select(alpha,beta,sigma) 
+```
+
+We can view a summary with the `precis` command. This gives a table with means and quantiles, and also a chunky little histogram. 
+```{r}
+precis(samples_lin_reg_model)
+```
+
+
+We can look at the scatter plot of the points themselves. This is a fine thing to glance at.
+```{r}
+ggplot(data=samples_lin_reg_model, aes(x=alpha,y=beta)) + 
+  geom_jitter(width=0.1,height=0.03,alpha=0.1)+
+  scale_x_continuous(limits = c(108,122))+
+  scale_y_continuous(limits = c(0.7,1.1))
+```
+
+The marginal plots for each of the linear regression parameters:
+```{r}
+ggplot(data=samples_lin_reg_model, aes(x=alpha)) + 
+  geom_density(bw=.3) 
+
+ggplot(data=samples_lin_reg_model, aes(x=beta)) + 
+  geom_density( bw = 0.01) 
+
+```
+
+
+The bayesplot pair plots to see the covariance between alpha and beta
+```{r}
+bayesplot::mcmc_pairs(samples_lin_reg_model,diag_fun = "dens",
+  off_diag_fun =  "hex") 
+
+```
+
+
