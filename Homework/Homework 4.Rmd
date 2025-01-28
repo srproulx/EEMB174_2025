@@ -1,0 +1,30 @@
+---
+title: "Homework 4"
+author: "EEMB 174-274"
+output: pdf_document
+header-includes:
+  - \usepackage{color}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(rethinking)
+#source("../Resources/helper.R")
+```
+# Bayesian Statistical Modeling Winter 2025
+# Homework, Week 4
+
+*When is homework due?* Homework is due on Mondays (Tuesday if Monday is a holiday). This assignment is due on Monday, 2/3/2024. 
+
+
+Complete these problems from the end of chapter 5.
+
+## 5E1
+
+## 5E3
+
+## 5M1
+
+## 5M4
+
