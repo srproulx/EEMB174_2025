@@ -1,0 +1,343 @@
+---
+title: 'Day 6: Multiple Regression'
+author: "Stephen R. Proulx"
+date: "1/29/2025"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(rethinking)
+library(bayesplot)
+source("../helper.R")
+
+```
+
+# Today's objectives:  
+
+* Use quap to perform multiple regression   
+* Develop an understanding of how including parameters can alter our inference
+
+Our general routine will be:
+1. Write a likelihood model for the data and choose priors   
+2. Make sure the priors are sensible. Start with broad or flat priors, and then apply knowledge to shrink them.  
+3. Use a method to approximate the posterior probability density of the parameters given the data.  
+4. Get a sample of parameters from the posterior (for MCMC methods this happens in step 3).   
+5. Analyze the posterior distribution.  
+6. Conduct posterior predictive simulation to sanity check our work and to make predictions for future work.
+
+
+
+Note on chapter 5: 
+McElreath spends a lot of time developing the DAG concept and discussing how confounds arise when the structure of the causal model is not accounted for. We are largely going to bypass this. It's useful to read it and start thinking about it, but you won't be tested on this and we won't directly use it in the rest of our analysis.
+
+## Spurius waffles
+Load the data on divorce rates by state.  
+```{r load_waffle}
+data(WaffleDivorce)
+d <- WaffleDivorce
+```
+
+
+This is the correlation between waffle houses and divorce rate. It isn't super informative, but is none the less a statistically detectable effect.
+```{r plot_waffle}
+ 
+  ggplot(d, aes(x = WaffleHouses/Population, y = Divorce))+
+  geom_jitter(alpha=0.5)+
+  scale_x_continuous("Waffle Houses per million", limits = c(0, 55)) +
+  scale_y_continuous("Divorce Rate", limits = c(0, 20)) 
+
+```
+
+### Prepare the data
+We'll work with standardized transformations of the data. The function `standardize` does the work for us, and we'll use new columns that are single letter names, as in the book. 
+```{r standardice_data}
+d <-
+  d %>%
+  mutate(A = standardize(MedianAgeMarriage),
+         D = standardize(Divorce),
+         M = standardize(Marriage))
+```
+```{r}
+view(d)
+```
+
+```{r}
+ggplot(d,aes(x=D))+geom_histogram(bins=10)
+
+ggplot(d,aes(x=A))+geom_histogram(bins=10)
+
+ggplot(d,aes(x=M))+geom_histogram(bins=10)
+
+```
+
+
+
+
+
+### First model, median age matters
+
+Here's the description of the model
+$$
+D_i \sim \mathrm{Normal}(\mu_i, \sigma)\\
+\mu_i   = a +bA*A_i \\
+a \sim \mathrm{Normal}(0,0.2)\\
+bA \sim \mathrm{Normal}(0,0.5)\\
+\sigma \sim \mathrm{Exponential}(1) 
+$$
+Write the quap model for this- you need to fill in the "alist" part:
+```{r M5.1 , echo=FALSE}
+M5.1 <- quap( alist(
+  D ~ dnorm(mu,sigma),
+  mu <- a+  bA * A,
+  a ~ dnorm(0,0.2),
+  bA ~ dnorm(0,1),
+  sigma ~ dexp(1)),
+  data=d)
+```
+
+Have a look at the means and likely intervals of the parameters. `precis` is a good method for this.
+```{r M5.1 , echo=FALSE}
+precis(M5.1)
+
+```
+
+Extract the samples:
+```{r}
+samples_M5.1 <- extract.samples(M5.1)
+```
+
+
+Use this `mcmc_areas` to get the parameter distributions plotted in a way that we can visualize their limits.
+```{r}
+bayesplot::mcmc_areas(samples_M5.1, prob=0.9, area_method="equal height") +
+  geom_vline(xintercept = 0 , color="red")+
+  scale_x_continuous(limits=c(-1.5,1.5),
+                     breaks = c(-1,-0.5,0,0.5,1)) 
+
+
+```
+
+
+```{r}
+test_d <- tibble(A=seq(from=-2,to=2,by=0.1))
+```
+
+
+And run this back through `link_df`
+```{r}
+samples_Aonly <- link_df(M5.1,test_d)
+summarised_samples_Aonly<-group_by(samples_Aonly,A) %>%
+  summarise(mean_mu=mean(mu),
+            lower_mu=quantile(mu,0.1),
+            upper_mu=quantile(mu,0.9))%>%
+  ungroup()
+
+ggplot(summarised_samples_Aonly,aes(x = A, y =mean_mu)) +
+  geom_ribbon(aes(ymin=lower_mu,ymax=upper_mu),alpha=0.5)+
+  geom_point(data=d,aes(x=A,y=D))
+
+```
+### Second model, marriage rate matters
+
+Here's the description of the model
+$$
+D_i \sim \mathrm{Normal}(\mu_i, \sigma)\\
+\mu_i   = a +bM*M_i \\
+a \sim \mathrm{Normal}(0,0.2)\\
+bM \sim \mathrm{Normal}(0,0.5)\\
+\sigma \sim \mathrm{Exponential}(1) 
+$$
+Write the quap model for this- you need to fill in the "alist" part:
+```{r M5.2 , echo=FALSE}
+M5.2 <- quap( alist(
+  D ~ dnorm(mu,sigma),
+  mu <- a+  bM * M,
+  a ~ dnorm(0,0.2),
+  bM ~ dnorm(0,1),
+  sigma ~ dexp(1)),
+  data=d)
+```
+
+
+
+Have a look at the means and likely intervals of the parameters. `precis` is a good method for this.
+```{r M5.2 , echo=FALSE}
+precis(M5.2)
+
+```
+
+Extract the samples
+```{r}
+samples_M5.2 <- extract.samples(M5.2)
+```
+
+
+Use this `mcmc_areas` to get the parameter distributions plotted in a way that we can visualize their limits.
+```{r}
+bayesplot::mcmc_areas(samples_M5.2,prob=0.9 , area_method="equal height") +
+  geom_vline(xintercept = 0 , color="red")+
+  scale_x_continuous(limits=c(-1.5,1.5),
+                     breaks = c(-1,-0.5,0,0.5,1)) 
+
+
+```
+
+
+Are marriage age and marriage rate themselves correlated?
+```{r}
+ggplot(d,aes(x=M,y=A))+geom_point()
+```
+### Third model, both marriage age and marriage rate matters
+
+
+$$
+D_i \sim \mathrm{Normal}(\mu_i, \sigma)\\
+\mu_i   = a + bA*A_i + bM*M_i \\
+a \sim \mathrm{Normal}(0,0.2)\\
+bA \sim \mathrm{Normal}(0,0.5)\\
+bM \sim \mathrm{Normal}(0,0.5)\\
+\sigma \sim \mathrm{Exponential}(1) 
+$$
+Note that `A` and `M` appear in a completely interchangeable way here. So we could say that we are interested in the effect of `A` after controlling for `M`, or the effect of `M` after controlling for `A`, the model won't know the difference!
+
+Write the quap model for this- you need to fill in the "alist" part:
+```{r M5.3 , echo=FALSE}
+M5.3 <- quap( alist(
+  D ~ dnorm(mu,sigma),
+  mu <- a + bA*A + bM * M,
+  a ~ dnorm(0,0.2),
+  bA ~ dnorm(0,0.5),
+  bM ~ dnorm(0,0.5),
+  sigma ~ dexp(1)),
+  data=d)
+```
+
+Have a look at the means and likely intervals of the parameters. `precis` is a good method for this.
+```{r M5.2 , echo=FALSE}
+precis(M5.3)
+
+```
+
+Extract the samples
+```{r}
+samples_M5.3 <- extract.samples(M5.3)
+```
+
+
+Use this `mcmc_areas` to get the parameter distributions plotted in a way that we can visualize their limits.
+```{r}
+bayesplot::mcmc_areas(samples_M5.3,prob=0.9 , area_method="equal height") +
+  geom_vline(xintercept = 0 , color="red")+
+  scale_x_continuous(limits=c(-1.5,1.5),
+                     breaks = c(-1,-0.5,0,0.5,1)) 
+
+
+```
+Here you should interpret what you see, what is this telling us about how information from `A` and `M` combine?
+
+
+
+
+
+
+### counterfactual plots and posterior predictive plots
+We can use the fitted model in order to ask how the model represents the actually observed predictor variables, or how sets of predictor variables that we did not observe are represented. 
+
+The recipe is:
+
+1. Create a dataframe containing the sets of predictor variable measurements you want to include.  
+2. Use `link_df` or `sim_df` to create a sample of mean values or a sample of simulated values.  
+3. Create a summary or plot with these sampled values.  
+
+For this we'll explore how a sequence of values of one of the predictor variables affects the outcome while the other variable is left at it's mean valeu. 
+
+```{r}
+test_d <- tibble(M=seq(from=-2,to=2,by=0.1),A=0)
+```
+
+```{r}
+test_d
+```
+
+
+And run this back through `link_df`
+```{r}
+samples_M5.3 <- link_df(M5.3,test_d)
+summarised_samples_M5.3<-group_by(samples_M5.3,index) %>%
+  summarise(mean_mu=mean(mu),
+            lower_mu=quantile(mu,0.1),
+            upper_mu=quantile(mu,0.9),
+            M=M)%>%
+  ungroup()
+```
+
+We'll run it through `sim_df`, too. This way we can look at both variance in the parameters and expected variance in observations themselves. 
+```{r}
+
+simulations_M5.3 <- sim_df(M5.3,test_d)
+summarised_simulations_M5.3<-group_by(simulations_M5.3,index) %>%
+  summarise(mean_D=mean(D),
+            lower_D=quantile(D,0.1),
+            upper_D=quantile(D,0.9),
+            M=M)%>%
+  ungroup()
+```
+
+
+```{r}
+ggplot(summarised_samples_M5.3,aes(x = M, y =mean_mu)) +
+  geom_line(color="red")+
+  geom_ribbon(aes(ymin=lower_mu,ymax=upper_mu),alpha=0.5,fill="red")+
+  geom_ribbon(data=summarised_simulations_M5.3,inherit.aes = FALSE,
+              aes(x=M,ymin=lower_D,ymax=upper_D),alpha=0.5,fill="blue")
+```
+
+
+Now you make the complementary figure where $M=0$ and $A$ is varied.
+
+
+
+```{r}
+test_d <- tibble(A=seq(from=-2,to=2,by=0.1),M=0)
+```
+
+```{r}
+test_d
+```
+
+
+And run this back through `link_df`
+```{r}
+samples_M5.3 <- link_df(M5.3,test_d)
+summarised_samples_M5.3<-group_by(samples_M5.3,index) %>%
+  summarise(mean_mu=mean(mu),
+            lower_mu=quantile(mu,0.1),
+            upper_mu=quantile(mu,0.9),
+            A=A)%>%
+  ungroup()
+```
+
+We'll run it through `sim_df`, too. This way we can look at both variance in the parameters and expected variance in observations themselves. 
+```{r}
+
+simulations_M5.3 <- sim_df(M5.3,test_d)
+summarised_simulations_M5.3<-group_by(simulations_M5.3,index) %>%
+  summarise(mean_D=mean(D),
+            lower_D=quantile(D,0.1),
+            upper_D=quantile(D,0.9),
+            A=A)%>%
+  ungroup()
+```
+
+
+```{r}
+ggplot(summarised_samples_M5.3,aes(x = A, y =mean_mu)) +
+  geom_line(color="red")+
+  geom_ribbon(aes(ymin=lower_mu,ymax=upper_mu),alpha=0.5,fill="red")+
+  geom_ribbon(data=summarised_simulations_M5.3,inherit.aes = FALSE,
+              aes(x=A,ymin=lower_D,ymax=upper_D),alpha=0.5,fill="blue")
+```
+
