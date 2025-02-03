@@ -265,7 +265,7 @@ ggplot(summarised.sims.ave.legs, aes(x=height,y=height))+
 ```
 
 
-model with both legs showing "error"
+A more complex model (that needs MCMC methods to fit) with both legs showing an unknown deviation from the true growth of legs value (i.e. measurement error or developmental noise)
 
 ```{r}
 m.legs.noise <- 
