@@ -1,0 +1,381 @@
+---
+title: 'Day 7: Multicollinearity'
+author: "Stephen R. Proulx"
+date: "2/3/2025"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(rethinking)
+source("../helper.R")
+
+```
+
+# Today's objectives:  
+
+* Perform mutliple regression on simulated data to explore how regression models do and do not capture causal processes.  
+* Use posterior simulation data to see how models where no slope is different from 0 can still predict data accurately  
+* Conduct multiple regression with a real dataset that exhibits multicollinearity   
+
+ 
+
+
+## Effects of Multicolinearity
+
+Here we start with simulated data where we assume that legs are 40-50% of total height and that there is some difference between measured right and left leg length.
+```{r}
+n <- 100
+set.seed(5)
+
+d <- 
+  tibble(index = seq(1:n) , height    = rnorm(n, mean = 10, sd = 2),
+         leg_prop  = runif(n, min = 0.4, max = 0.5)) %>% 
+  mutate(leg_left  = leg_prop * height + rnorm(n, mean = 0, sd = 0.02),
+         leg_right = leg_prop * height + rnorm(n, mean = 0, sd = 0.02))
+```
+
+
+Left and right leg lengths are highly correlated:
+```{r}
+ggplot(d,aes(x = leg_left, y = leg_right)) +
+  geom_point(alpha = 1/2 ) 
+```
+
+And so is either leg length with total height, although in our model there is a bit more scatter.
+```{r}
+ggplot(d,aes(x = leg_left, y = height)) +
+  geom_point(alpha = 1/2 )  
+ggplot(d,aes(x = leg_right, y = height)) +
+  geom_point(alpha = 1/2 )  
+```
+
+
+### Is leg length a good predictor of total height?
+Go through the process of fitting models of these data. Create one model that does not use either leg, one with only the left leg, one with only the right leg, and a model that has both legs. Give each model a distinctive name so you can use the output again later.   
+
+Use precis and whichever methods of plotting posterior distributions of parameters you like to get an idea of what is happening in each of these models. 
+
+
+```{r}
+m.no.legs <- 
+  quap( alist(
+    height ~ dnorm(mu,sigma),
+    mu <- a  ,
+    a ~ dnorm(10,4),
+    sigma ~ dexp(1) ),
+    data=d)
+
+
+precis(m.no.legs)
+```
+
+```{r}
+m.left <- 
+  quap( alist(
+    height ~ dnorm(mu,sigma),
+    mu <- a + b1 * leg_left  ,
+    a ~ dnorm(10,4),
+    b1 ~ dnorm(0,2),
+    sigma ~ dexp(1) ),
+    data=d)
+
+
+precis(m.left)
+```
+```{r}
+m.right <- 
+  quap( alist(
+    height ~ dnorm(mu,sigma),
+    mu <- a + b2 * leg_right  ,
+    a ~ dnorm(10,4),
+    b2 ~ dnorm(0,2),
+    sigma ~ dexp(1) ),
+    data=d)
+
+
+precis(m.right)
+```
+
+```{r}
+m.both.legs <- 
+  quap( alist(
+    height ~ dnorm(mu,sigma),
+    mu <- a + b1 * leg_left +b2*leg_right ,
+    a ~ dnorm(10,4),
+    b1 ~ dnorm(0,2),
+    b2 ~ dnorm(0,2),
+    sigma ~ dexp(1) ),
+    data=d)
+
+
+precis(m.both.legs)
+```
+
+
+Have a look at the posterior densities
+```{r}
+rethinking::denschart(m.both.legs) 
+bayesplot::mcmc_areas(extract.samples( m.both.legs) )
+
+bayesplot::mcmc_intervals(extract.samples( m.both.legs) ) 
+```
+
+```{r}
+rethinking::pairs(m.both.legs)
+```
+
+### Check your understanding exercise
+We saw in the pairs plot that b1 and b2 are highly negatively correlated (in the posterior distribution), but that a and sigma are not correlated with other parameters. Check to see how (b1,b2) pairs from opposite corners of the joint distribution predict mean height values. 
+
+1. First pick two values lines from the posterior distribution and write down the values of b1 and b2
+2. Write down the mean value of a
+3. Pick two data points from the height dataframe. 
+4. Use the transformation equation to calculate the value for mu for the two data points. Use the paired values of (b1,b2) from the posterior and the median value of a. 
+5. Do they give similar results? Why?
+6. Now mix the left leg/right leg values from the data frame and repeat. Do they give similar results?
+
+
+### Posterior predictions
+Now create plots of the expected data that would come out of each of the fitted models. Try and get something that has the actual height of the individual on the x-axis and shows the mean and range of likely height values predicted for that individual. You may also want to include the actual height on the graph as well, or another way of drawing a line with slope 1. 
+
+
+
+
+Summarize the simulation data and join it to the original dataset.
+
+```{r}
+sims.no.legs <- sim_df(m.no.legs, select(d,-index))
+ 
+summarised.sims.no.legs <- group_by(sims.no.legs,index) %>%
+  summarise(mean.height=mean(height),
+            lower.height=quantile(height,0.1),
+            upper.height=quantile(height,0.9))%>%
+  ungroup() %>%
+  left_join(d)
+```
+
+Plot the simulations using the errorbar package. 
+```{r}
+ggplot(summarised.sims.no.legs, aes(x=height,y= height))+
+  geom_point(color="red")+
+  geom_errorbar(aes(ymin=lower.height,ymax=upper.height))+
+  ylim(2,20)+
+  ylab("Predicted Height")
+
+```
+
+For the other models:
+```{r}
+sims.left <- sim_df(m.left, select(d,-index))
+ 
+summarised.sims.left <- group_by(sims.left,index) %>%
+  summarise(mean.height=mean(height),
+            lower.height=quantile(height,0.1),
+            upper.height=quantile(height,0.9))%>%
+  ungroup() %>%
+  left_join(d)
+```
+
+```{r}
+ggplot(summarised.sims.left, aes(x=height,y=height))+
+  geom_point(color="red")+
+  geom_errorbar(aes(ymin=lower.height,ymax=upper.height))+
+  ylim(2,20)+
+  ylab("Predicted Height")
+
+```
+
+
+```{r}
+sims.both.legs <- sim_df(m.both.legs, select(d,-index))
+ 
+summarised.sims.both.legs <- group_by(sims.both.legs,index) %>%
+  summarise(mean.height=mean(height),
+            lower.height=quantile(height,0.1),
+            upper.height=quantile(height,0.9))%>%
+  ungroup() %>%
+  left_join(d)
+```
+
+```{r}
+ggplot(summarised.sims.both.legs, aes(x=height,y=height))+
+  geom_point(color="red")+
+  geom_errorbar(aes(ymin=lower.height,ymax=upper.height))+
+  ylim(2,20)+
+  ylab("Predicted Height")
+
+```
+
+
+### Model based on average leg length
+Modify the data by adding a column for average leg length (average left and right legs) and difference between left and write leg. Run a multiple regression with those two values as predictors. Do the same check your understanding exercise with this model. How does it differ from before?
+
+
+```{r}
+d2 <- mutate(d, ave_leg=(leg_left+leg_right)/2,leg_diff=leg_left-leg_right)
+```
+
+```{r}
+m.ave.legs <- 
+  quap( alist(
+    height ~ dnorm(mu,sigma),
+    mu <- a + b1 * ave_leg +b2*leg_diff ,
+    a ~ dnorm(10,4),
+    b1 ~ dnorm(0,2),
+    b2 ~ dnorm(0,2),
+    sigma ~ dexp(1) ),
+    data=d2)
+
+
+precis(m.ave.legs)
+```
+
+```{r}
+sims.ave.legs <- sim_df(m.ave.legs, select(d2,-index))
+ 
+summarised.sims.ave.legs <- group_by(sims.ave.legs,index) %>%
+  summarise(mean.height=mean(height),
+            lower.height=quantile(height,0.1),
+            upper.height=quantile(height,0.9))%>%
+  ungroup() %>%
+  left_join(d)
+```
+
+```{r}
+ggplot(summarised.sims.ave.legs, aes(x=height,y=height))+
+  geom_point(color="red")+
+  geom_errorbar(aes(ymin=lower.height,ymax=upper.height))+
+  ylim(2,20)+
+  ylab("Predicted Height")
+
+```
+
+
+model with both legs showing "error"
+
+```{r}
+m.legs.noise <- 
+  ulam( alist(
+    height ~ dnorm(mu,sigma),
+    mu <- a + b1 * leg_imputed[index] ,
+    leg_left ~dnorm(leg_imputed[index],sigma_leg),
+    leg_right~dnorm(leg_imputed[index],sigma_leg),
+    a ~ dnorm(10,4),
+    b1 ~ dnorm(0,2),
+    leg_imputed[index] ~ dnorm(mean_leg,mean_leg_sd),
+    mean_leg ~ dnorm(5,3),
+    mean_leg_sd~dexp(1),
+    sigma ~ dexp(1) ,
+    sigma_leg~ dexp(1)),
+    data=d2)
+
+
+precis(m.legs.noise)
+```
+
+### Collinearity in real data: energy content of milk
+Here is a dataset that measures the calorie content of mammal milk as well as the fat and lactose content of the milk.
+
+```{r}
+data(milk)
+d <- milk %>% as_tibble() %>% 
+  rowid_to_column("index") %>%
+  mutate(K=standardize(kcal.per.g),
+         F=standardize(perc.fat),
+         L=standardize(perc.lactose))
+
+ggplot(data=d , aes(y=K, x= F))+geom_point()
+
+ggplot(data=d , aes(y=K, x= L))+geom_point()
+
+
+ggplot(data=d , aes(y=F, x= L))+geom_point()
+```
+
+
+
+Here is the quap call to conduct multiple regression with F and L as predictors.
+
+Use this model fit to explore how including the predictor affects our posterior simulations when we drop F and/or L from the predictions by setting it to the mean value in the population.
+
+```{r}
+m6.5.full <- quap(
+    alist(
+        K ~ dnorm( mu , sigma ) ,
+        mu <- a + bF*F + bL*L ,
+        a ~ dnorm( 0 , 0.2 ) ,
+        bF ~ dnorm( 0 , 0.5 ) ,
+        bL ~ dnorm( 0 , 0.5 ) ,
+        sigma ~ dexp( 1 )
+    ) ,
+    data=d )
+precis( m6.5.full )
+
+```
+
+```{r}
+rethinking::pairs(m6.5.full)
+```
+
+
+```{r}
+sims.m6.5 <- sim_df(m6.5.full, select(d,-index))
+ 
+summarised.sims.m6.5 <- group_by(sims.m6.5,index) %>%
+  summarise(mean.K=mean(K),
+            lower.K=quantile(K,0.1),
+            upper.K=quantile(K,0.9))%>%
+  ungroup() %>%
+  left_join(d)
+```
+
+```{r}
+ggplot(summarised.sims.m6.5, aes(x=K,y=K))+
+  geom_point(color="red")+
+  geom_errorbar(aes(ymin=lower.K,ymax=upper.K))+
+  ylim(-3,3)+
+  ylab("Predicted K")
+
+```
+
+How much does knowing percent fat affect our predictions? We can run the simulation and set F=0, which says that we use the average fat content of milk in the dataset as the value of the predictor F in our simulation. The model basically performs fine, even though some of these values of L/F combine to make unreasonable (even impossible) species.
+```{r}
+sims.m6.5.NoFat <- sim_df(m6.5.full, select(d,-index) %>% mutate(F=0))
+ 
+summarised.sims.m6.5.NoFat <- group_by(sims.m6.5.NoFat,index) %>%
+  summarise(mean.K=mean(K),
+            lower.K=quantile(K,0.1),
+            upper.K=quantile(K,0.9))%>%
+  ungroup() %>%
+  left_join(d)
+
+ggplot(summarised.sims.m6.5.NoFat, aes(x=K,y=K))+
+  geom_point(color="red")+
+  geom_errorbar(aes(ymin=lower.K,ymax=upper.K))+
+  ylim(-3,3)+
+  ylab("Predicted K")
+
+```
+
+How much does knowing percent lactose affect our predictions? We do the opposite here, setting L=0 and now the model is doing a poor job of predicting the actual caloric content of milk because F alone does not do a great job of predicting caloric content.
+```{r}
+sims.m6.5.NoLac <- sim_df(m6.5.full, select(d,-index) %>% mutate(L=0))
+ 
+summarised.sims.m6.5.NoLac <- group_by(sims.m6.5.NoLac,index) %>%
+  summarise(mean.K=mean(K),
+            lower.K=quantile(K,0.1),
+            upper.K=quantile(K,0.9))%>%
+  ungroup() %>%
+  left_join(d)
+
+ggplot(summarised.sims.m6.5.NoLac, aes(x=K,y=K))+
+  geom_point(color="red")+
+  geom_errorbar(aes(ymin=lower.K,ymax=upper.K))+
+  ylim(-3,3)+
+  ylab("Predicted K")
+
+```
+
