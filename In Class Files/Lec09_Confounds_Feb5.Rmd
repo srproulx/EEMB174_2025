@@ -1,0 +1,200 @@
+---
+title: 'Day 9: Post-treatment bias'
+author: "Stephen R. Proulx"
+date: "2/5/2025"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(rethinking)
+source("../helper.R")
+
+```
+
+# Today's objectives:  
+
+* Indexing Categorical Variables: Similar method to linear regression but without a line      
+* Post-treatment bias: Bad for hypothesis testing, fine for fitting
+
+ 
+
+
+## Categorical variables
+Linear regression involves assuming that a model for how a predictor affects the likelihood function. It is a specific model, where there is a linear function relating the predictor to the outcome. We often have predictors that we don't have a model for, and we want to estimate each of their effects assuming that each value of the predictor has it's own independent effect. This is the case when we have "categorical" predictors.
+
+
+NOTE: There can be more than one observation with the same categorical index.  
+```{r}
+ 
+
+covid_cases <- tibble(name=c("Santa Barbara" , "Goleta", "Santa Maria"), loc=c(1,2,3), pop=c(92100,31100,107000) , cases=c(14721,5079,22741))
+
+
+```
+
+
+
+$$
+\mathrm{cases}_i \sim \mathrm{binomial}(\mathrm{pop}_i,\mu_i)\\
+\mu_i \sim \mathrm{uniform}(0,1)
+$$
+Try writing out the expression for the posterior probability of $\mu$ using your mantra, likelihood * prior / normalization.
+
+
+Here is the way to write this model for `quap`. Important point is that in our dataframe `loc` has the values 1, 2, and 3. This will fail if they are not integers starting at 1.
+
+How does `quap` know to automatically index `cases` and `pop` but not `mu`? It is because `cases` and `pop` appear in our dataframe as columns, but `mu` does not. i.e. because `mu` is a parameter it is assumed to apply to all lines of data unless otherwise specified. 
+```{r}
+m.covid <- quap( alist(
+  cases ~ dbinom(pop,mu[loc]),
+  mu[loc] ~ dunif(0,1)
+) , data=covid_cases 
+)
+
+
+
+precis(m.covid,depth = 2)
+```
+
+
+```{r}
+samples.covid <- extract.samples(m.covid) %>% as_tibble()
+bayesplot::mcmc_intervals(samples.covid, prob=0.8, prob_outer = 0.95)
+```
+ 
+### Exercise: Multiple observations within a category
+Construct a new dataset that has observations of covid case numbers at multiple locations within Santa Barbara County and within Ventura County.  Use the data I gave you Santa Barbara county, adding a column to code for county index. Add data for Ojai (pop 20379, covid 3638), Santa Paula (pop 33751, covid 12180), and Fillmore (pop 18731, covid 6913) as from Ventura County. Construct a model that estimates the rate of covid cases by county. 
+
+Note that now we want to use county as the index, not `loc`. Make sure you index the counties starting at 1. It is ok that there are more than one entry per county. 
+
+
+
+### Check your understanding: What will happen if you group all the data within each county before running the model?
+First discuss with your group what might happen here. What are your expectations? What assumptions does this reveal about our model?
+
+Now create a new dataframe with just SB and V county data in two rows. Run the quap model and compare to the above output.
+
+Can you think of scenarios where pooling the data like this could hide some important processes?
+
+## Post-treatment bias
+In the book, McElreath develops a simulation model for a dataset where plants are treated with a fungicide, and presence of fungus has a causal effect on growth. Here's the model: 
+```{r}
+set.seed(71)
+# number of plants
+N <- 100
+
+# simulate initial heights
+h0 <- rnorm(N,10,2)
+
+# assign treatments and simulate fungus and growth
+treatment <- rep( 0:1 , each=N/2 )
+fungus <- rbinom( N , size=1 , prob=0.5 - treatment*0.4 )
+h1 <- h0 + rnorm(N, 5 - 3*fungus)
+
+# compose a clean data frame
+sim_plant_data <- data.frame( h0=h0 , h1=h1 , treatment=treatment , fungus=fungus )
+precis(sim_plant_data)
+
+
+```
+```{r}
+ggplot(sim_plant_data, aes(x=treatment,y=log(h1/h0),color=as.factor(fungus)))+geom_jitter(width=0.25,height=0)
+```
+
+
+### Fitting models with treatment and post-treatment effects
+Construct two quap models to explore the effect of treatment on plant height. One model will include the effect of the fungicide treatment, the other will additionally include the effect of presence of fungus on the plant post-treatment. 
+
+We want to control for growth, but here we have a very specific model. Plants grow by multiplying their original height by a growth factor. Both models should include the effect of original plant height, h0.
+
+model 6.7
+$$
+h1 \sim \mathrm{normal}(\mu , \sigma) \\
+\mu = h0*p \\
+p = a + b_t * \mathrm{treatment} + b_f * \mathrm{fungus}
+$$
+
+model with treatment and fungus
+```{r}
+m6.7 <- quap(
+    alist(
+      h1 ~ dnorm(mu,sigma),
+      mu <- h0*p ,
+      p <- a + bt*treatment + bf*fungus,
+        a ~ dlnorm( 0 , 0.2 ) ,
+        bt ~ dnorm( 0.5 , 0.5 ),
+        bf ~ dnorm( 0 , 0.5 ),
+        sigma ~ dexp( 1 )
+    ), data=sim_plant_data )
+precis(m6.7)
+```
+
+
+model 6.8
+$$
+h1 \sim \mathrm{normal}(\mu , \sigma) \\
+\mu = h0*p \\
+p = a + b_t * \mathrm{treatment} 
+$$
+
+model with treatment only
+```{r} 
+m6.8 <- quap(
+    alist(
+      h1 ~ dnorm(mu,sigma),
+      mu <- h0*p ,
+      p <- a + bt*treatment ,
+        a ~ dlnorm( 0 , 0.2 ),
+        bt ~ dnorm( 0 , 0.5 ),
+        sigma ~ dexp( 1 )
+    ), data=sim_plant_data )
+precis(m6.8)
+
+
+```
+
+
+### "Residuals" of the model fits
+We will do a different kind of posterior plot than we have so far done. We will calculate the difference between the model expectation (i.e. mu) and the actual plant height, h1. We do this in almost the same way as we did for our other posterior simulations, but we add a column, using mutate, that calculates the squared difference between h1 and the mean of mu. Something like: `mutate(res.h1 = (h1-mean.mu)^2 )`
+
+Create this residual for both of your models and plot them on a single plot, giving each model a different color.
+
+```{r}
+
+samples.m6.7 <- link_df(m6.7,sim_plant_data)
+
+summarised.samples.m6.7 <- group_by(samples.m6.7,index) %>%
+  summarise(mean.mu=mean(mu),
+            lower.mu=quantile(mu,0.1),
+            upper.mu=quantile(mu,0.9))%>%
+  ungroup() %>%
+  left_join(rowid_to_column(sim_plant_data,"index")) %>%
+  mutate(res.h1 = (h1-mean.mu)^2 )
+
+```
+
+```{r}
+samples.m6.8 <- link_df(m6.8,sim_plant_data)
+
+summarised.samples.m6.8 <- group_by(samples.m6.8,index) %>%
+  summarise(mean.mu=mean(mu),
+            lower.mu=quantile(mu,0.1),
+            upper.mu=quantile(mu,0.9))%>%
+  ungroup() %>%
+ left_join(rowid_to_column(sim_plant_data,"index")) %>%
+  mutate(res.h1 = (h1-mean.mu)^2 )
+```
+
+
+```{r}
+# take only the 20 data points in the middle that include both treated and untreated plants so we can see what is going on more clearly.
+ggplot(filter(summarised.samples.m6.8,index<20), aes(x=index,y=res.h1))+
+  geom_point(color="red")  +
+  geom_point(data=filter(summarised.samples.m6.7,index<20), color="green")
+  
+```
+
+We can observe that the model with fungus and treatment has dots that tend to be closer to 0 than the treatment only model. This is telling us that the model with both fungus and treatment tends to be better at prediction (in sample) than the model with only treatment. Look back through the data, and check to see which data points are predicted best by the model with only treatment. Why would this be?
