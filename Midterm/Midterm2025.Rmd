@@ -1,0 +1,156 @@
+---
+title: "Midterm2025"
+author: "Stephen R. Proulx"
+date: "2025-02-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(rethinking)
+#source("../helper.R")
+
+``` 
+
+
+
+
+
+## Short Awnswer 
+
+### Question 1 (6 pts)
+Recall your Bayesian data analysis mantra. 
+
+Part A)
+Write it out in word format:
+
+
+
+Part B)
+Write it out in probability statement format (i.e. Pr(B|A) etc):
+
+
+
+
+### Question 2 (6 pts)
+What are the 3 sections that we can use to mathematically describe a Bayesian model?  
+
+
+
+## THIS NEEDS ADJUSTING TO BE MORE CLEAR!!!
+### Question 3 (6 pts)
+Your friend shows you a dataset from their experiment in astral zenobiology. They have 20 independent observations of the mental life-force of virtual lifeforms, and they insist that due to their knowledge of the system, the appropriate distribution for the observations is the Sakanaesse distribution, defined as $S(y | \mu,\theta)$ (here we are defining the probability (or likelihood) of seeing a value $y$ given two parameters $\mu$ and $\theta$). 
+
+The data you are given are in a table where column $y$ is the observed value, so $y_i$ is the value for individual observation $i$. 
+
+Part A) Write out the likelihood formula in mathematical terms (like you would on paper or the board) 
+
+Probability(of observing all the data y) =
+
+
+Part B) Write out the likelihood formula on the log scale, i.e. $log( Pr(y|\mu,\theta) )$
+
+
+Log(Probability(observing all the data y)) =
+
+
+
+## Analysis Challenge (82 points)
+
+For this midterm exercise we will use data from this paper:  https://onlinelibrary.wiley.com/doi/10.1111/oik.07674 . We will use only a portion of their data, but our analysis will involve similar models to the ones discussed in the paper. You are free to read the paper or look to it for modeling inspiration, but you can complete this entire exercise without looking at the paper. 
+
+
+In this study, clown fish were observed in breeding groups associated with sea anemones. In the dataset, each row is an observation.
+
+The dataframe has 236 observations of 61 unique fish groups (labeled by Anemone_ID). Anemone size is taken to represent the food-richness of the area the fish live in, so anemone size might influence fish health and therefore fish reproductive output. 
+
+The dataset includes a treatment, which is that some of the groups of fish were fed additional food. The column "FedIndex" is 1 if the fish were not fed, and 2 if they were fed. The treatment was performed in the middle of the season, so that some clutches of eggs were produced before the treatment, and others were produced after the treatment. The column "PostTreatment" is 1 if the clutch was laid before the treatment and 2 if it was after. Note that fish in the FedIndex=1 category were never fed additional food, even if PostTreatment=2. 
+
+First clear your working environment and load the data.
+```{r}
+rm(list=ls())
+
+load("ClownFishData.RData")
+```
+
+You now have an object called "data" in your environment. Take a few minutes to inspect it.
+
+
+
+
+### (1) Standardize and plot
+We will be using anemone_area as a predictor. Since it is a continuous variable, it's a good idea to standardize it. Name the standardized version of this column "AA".
+
+
+Make a figure showing the relationship between anemone area and number of eggs laid.
+```{r}
+ggplot( YOURDATAFRAMENAMEHERE , aes(x=AA ,y=Eggs_Laid )) +geom_point()
+```
+```{r}
+d2<-mutate(data,
+           AA = standardize(anemone_area),
+           FS = standardize(female_size),
+           MS = standardize(male_size),
+           EL = standardize(Eggs_Laid))
+```
+
+Make a figure showing the relationship between anemone area and number of eggs laid. Use the standardized version of eggs laid (EL) and anemone area (AA)
+
+
+
+
+
+### (2) Plotting a prior
+You will construct a linear regression model for the number of eggs laid with the anemone area (standardized) as the predictor. The model is
+
+$$
+\mathrm{EL} \sim \mathrm{Normal(\mu,\sigma)}\\
+\mu = a + b * \mathrm{AA} \\
+a \sim \mathrm{Normal(0,2)} \\
+b \sim \mathrm{Normal(0,2)} \\
+\sigma \sim \mathrm{Exponential(1)} \\
+$$
+Plot the prior with the data. Explain what makes this a reasonable prior.
+
+
+### (3) Linear regression model
+Construct a *quap* model for the data and use `precis` to summarize the output. 
+
+
+
+
+### (4) Explain the precis output
+
+
+
+
+
+### (5) Plot the linear regression lines
+Use `link_df` to create samples of the *quap* fit. To do this, create a dataframe with evenly spaced out values of AA. Plot the mu values on a graph with the data. 
+
+
+
+
+
+### (6) List one "big world" explanations for why the data show more variability than the model fit does.
+
+
+
+### (7) Including the treatment effect 
+Split the data into two datasets, one for fish who received the treatment, and the other for fish who did not receive the treatment. 
+
+You will analyze each of these datasets with a multivariate model that builds on your prior model. In addition to the effect of anemone size, include an effect based on whether or not the clutch of eggs was laid before or after the feeding occurred (remember PostTreatment=1 before feeding, and 2 after feeding). 
+
+For each dataset, perform the quap fit and use `precis` to summarize the results.
+
+
+
+
+
+
+### (8) Interpret the quap fits. What can you say about how the two datasets differ from each other in terms of their response to anemone size and to pre/post treatment?
+
+
+
