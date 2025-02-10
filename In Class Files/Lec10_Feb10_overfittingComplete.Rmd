@@ -1,0 +1,499 @@
+---
+title: "Feb 13, over-fitting"
+author: "Stephen R. Proulx"
+date: "2/10/2025"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(rethinking)
+source("../helper.R")
+
+```
+
+# Today's objectives:  
+
+* Calculate the fit of a model to data for each data point, averaging over the sampled parameter values   
+* Observing overfitting in polynomial regression models    
+* Observe overfitting in categorical models  
+
+
+
+## Quantifying the model's fit using posterior simulations
+ 
+
+
+Remember our simulated plant data:
+```{r}
+set.seed(71)
+# number of plants
+N <- 100
+
+# simulate initial heights
+h0 <- rnorm(N,10,2)
+
+# assign treatments and simulate fungus and growth
+treatment <- rep( 0:1 , each=N/2 )
+fungus <- rbinom( N , size=1 , prob=0.5 - treatment*0.4 )
+h1 <- h0 + rnorm(N, 5 - 3*fungus)
+
+# compose a clean data frame
+sim_plant_data <- data.frame( h0=h0 , h1=h1 , treatment=treatment , fungus=fungus )
+```
+
+And our two competing models, one with an effect of treatment and fungus, the other with only treatment.
+```{r}
+m6.7 <- quap(
+    alist(
+        h1 ~ dnorm( mu , sigma ),
+        mu <- h0 * p,
+        p <- a + bt*treatment + bf*fungus,
+        a ~ dlnorm( 0 , 0.2 ) ,
+        bt ~ dnorm( 0 , 0.5 ),
+        bf ~ dnorm( 0 , 0.5 ),
+        sigma ~ dexp( 1 )
+    ), data=sim_plant_data )
+
+m6.8 <- quap(
+    alist(
+        h1 ~ dnorm( mu , sigma ),
+        mu <- h0 * p,
+        p <- a + bt*treatment,
+        a ~ dlnorm( 0 , 0.2 ),
+        bt ~ dnorm( 0 , 0.5 ),
+        sigma ~ dexp( 1 )
+    ), data=sim_plant_data )
+```
+
+```{r}
+precis(m6.7)
+
+precis(m6.8)
+```
+
+We found that in `m6.8`, the treatment has a positive effect on plant growth, but in `m6.7`, treatment has an effect close to zero and equally likely to be positive as negative. Fungus, on the other hand, has a strictly negative effect. This is an example of post-treatment bias, lack of fungus is due to the treatment, but not all treated plants lack fungus, so fungus is more associated with plant growth than treatment. Even more, once you know the fungus status of a plant, learning treatment does little. 
+
+
+How do these models differ in terms of how they predict the observed growth rates? We can calculate this by measuring the average difference between simlations from our inferred parameters and the actual observed values, and we can do this for every single point in the dataset. We will do this using the mean squared difference between the observation and the simulation, what is commonly used in least-squares regression and in calculating $R^2$.
+
+Summarize the simulations from `m6.7`
+```{r}
+
+samples.m6.7 <- link_df(m6.7,sim_plant_data)
+
+summarised.samples.m6.7 <- group_by(samples.m6.7,index) %>%
+  summarise(mean.mu=mean(mu),
+            lower.mu=quantile(mu,0.1),
+            upper.mu=quantile(mu,0.9))%>%
+  ungroup() %>%
+  left_join(rowid_to_column(sim_plant_data,"index")) %>%
+  mutate(res.h1 = (h1-mean.mu)^2 )
+
+```
+
+
+Summarize the simulations from `m6.8`
+```{r}
+samples.m6.8 <- link_df(m6.8,sim_plant_data)
+
+summarised.samples.m6.8 <- group_by(samples.m6.8,index) %>%
+  summarise(mean.mu=mean(mu),
+            lower.mu=quantile(mu,0.1),
+            upper.mu=quantile(mu,0.9))%>%
+  ungroup() %>%
+ left_join(rowid_to_column(sim_plant_data,"index")) %>%
+  mutate(res.h1 = (h1-mean.mu)^2 )
+```
+
+Now we plot them on the same graph with the more complex model in green.  
+```{r}
+ggplot(summarised.samples.m6.8, aes(x=index,y=res.h1))+
+  geom_point(color="red")  +
+  geom_point(data=summarised.samples.m6.7, color="green")
+  
+```
+And to see it a bit more clearly, here are the first 25 points only. In almost each case, the green is closer to 0, meaning better. But not in all cases, individual 7, 10, and 18 get fit way better by the simpler model.
+```{r}
+ggplot(filter(summarised.samples.m6.8,index<25), aes(x=index,y=res.h1))+
+  geom_point(color="red")  +
+  geom_point(data=filter(summarised.samples.m6.7,index<25), color="green")
+  
+```
+We can observe that the model with fungus and treatment has dots that tend to be closer to 0 than the treatment only model. This is telling us that the model with both fungus and treatment tends to be better at prediction (in sample) than the model with only treatment. Look back through the data, and check to see which data points are predicted best by the model with only treatment. Why would this be?
+
+## Section 7.1: fitting polynomials and assessing their fit
+
+
+First we set up a dataframe with the brain volume/mass data.
+```{r}
+## R code 7.1
+  
+
+d <- tibble(species = c( "afarensis","africanus","habilis","boisei",
+    "rudolfensis","ergaster","sapiens"), 
+    brain=c( 438 , 452 , 612, 521, 752, 871, 1350 ),
+    mass = c( 37.0 , 35.5 , 34.5 , 41.5 , 55.5 , 61.0 , 53.5 )
+    ) %>%
+  mutate(mass_std = standardize(mass),
+         brain_std = brain/max(brain)) %>%
+  rowid_to_column("index")
+```
+
+
+Now we fit a linear regression, with a little twist. We need to constrain sigma to be positive, and assuming it is log-normally distributed is a good way to do this. 
+
+Both of the following do the same thing. The second one uses a convenient notation for transformations that will come in handy for other applications soon.
+```{r}
+## R code 7.3
+m7.1 <- quap(
+    alist(
+        brain_std ~ dnorm( mu , exp(log_sigma) ),
+        mu <- a + b*mass_std,
+        a ~ dnorm( 0.5 , 1 ),
+        b ~ dnorm( 0 , 10 ),
+        log_sigma ~ dnorm( 0 , 1 )
+    ), data=d )
+
+
+## R code 7.3
+m7.1 <- quap(
+    alist(
+        brain_std ~ dnorm( mu , sigma ),
+        mu <- a + b*mass_std,
+        log(sigma) <- log_sigma ,
+        a ~ dnorm( 0.5 , 1 ),
+        b ~ dnorm( 0 , 10 ),
+        log_sigma ~ dnorm( 0 , 1 )
+    ), data=d )
+```
+
+It's easy to add more complicated transformation formulas. In some cases it will make sense to do some of this as pre-calcualtions on the dataframe itself, but here we can just specify it in quap. 
+```{r  }
+## R code 7.7
+m7.2 <- quap(
+    alist(
+        brain_std ~ dnorm( mu ,sigma ),
+        mu <- a + b[1]*mass_std + b[2]*mass_std^2,
+        log(sigma) <- log_sigma ,
+        a ~ dnorm( 0.5 , 1 ),
+        b ~ dnorm( 0 , 10 ),
+        log_sigma ~ dnorm( 0 , 1 )
+    ), data=d , start=list(b=rep(0,2)) )
+ 
+```
+
+
+Now you write the code for the models that have higher order polynomials up to 5 terms. 
+ 
+```{r  }
+## R code 7.8
+m7.3 <- quap(
+    alist(
+        brain_std ~ dnorm( mu , exp(log_sigma) ),
+        mu <- a + b[1]*mass_std + b[2]*mass_std^2 +
+                  b[3]*mass_std^3,
+        a ~ dnorm( 0.5 , 1 ),
+        b ~ dnorm( 0 , 10 ),
+        log_sigma ~ dnorm( 0 , 1 )
+    ), data=d , start=list(b=rep(0,3)) )
+
+m7.4 <- quap(
+    alist(
+        brain_std ~ dnorm( mu , exp(log_sigma) ),
+        mu <- a + b[1]*mass_std + b[2]*mass_std^2 +
+                  b[3]*mass_std^3 + b[4]*mass_std^4,
+        a ~ dnorm( 0.5 , 1 ),
+        b ~ dnorm( 0 , 10 ),
+        log_sigma ~ dnorm( 0 , 1 )
+    ), data=d , start=list(b=rep(0,4)) )
+
+m7.5 <- quap(
+    alist(
+        brain_std ~ dnorm( mu , exp(log_sigma) ),
+        mu <- a + b[1]*mass_std + b[2]*mass_std^2 +
+                  b[3]*mass_std^3 + b[4]*mass_std^4 +
+                  b[5]*mass_std^5,
+        a ~ dnorm( 0.5 , 1 ),
+        b ~ dnorm( 0 , 10 ),
+        log_sigma ~ dnorm( 0 , 1 )
+    ), data=d , start=list(b=rep(0,5)) )
+```
+
+
+
+For the final model, we need to specify the standard deviation itself or the model won't run properly.
+```{r  }
+## R code 7.9
+m7.6 <- quap(
+    alist(
+        brain_std ~ dnorm( mu , 0.001 ),
+        mu <- a + b[1]*mass_std + b[2]*mass_std^2 +
+                  b[3]*mass_std^3 + b[4]*mass_std^4 +
+                  b[5]*mass_std^5 + b[6]*mass_std^6,
+        a ~ dnorm( 0.5 , 1 ),
+        b ~ dnorm( 0 , 10 )
+    ), data=d , start=list(b=rep(0,6)) )
+
+```
+
+
+
+
+We can see how the regression compares to the data:
+```{r}
+samps.7.1 <- link_df(m7.1,data=tibble(mass_std=seq(from=-1, to=1.5, by=0.1)))
+
+summary.7.1 <- samps.7.1 %>%
+  group_by(mass_std)%>%
+  summarise(mean_mu = mean(mu),
+            lower_mu = quantile(mu,0.1),
+            upper_mu = quantile(mu,0.9)) %>%
+  ungroup() 
+
+ggplot(data=d, aes(x=mass_std,y=brain_std)) + 
+  geom_point()+
+  geom_ribbon(data=summary.7.1, inherit.aes = FALSE,aes(x=mass_std, ymin=lower_mu,ymax=upper_mu), fill="blue", alpha=0.2)+
+  geom_line(data=summary.7.1,aes(x=mass_std,y=mean_mu),color="red")
+```
+
+Now you plot the model fit ranges for the higher order models
+```{r}
+samps.7.2 <- link_df(m7.2,data=tibble(mass_std=seq(from=-1, to=1.5, by=0.1)))
+
+summary.7.2 <- samps.7.2 %>%
+  group_by(mass_std)%>%
+  summarise(mean_mu = mean(mu),
+            lower_mu = quantile(mu,0.1),
+            upper_mu = quantile(mu,0.9)) %>%
+  ungroup() 
+
+ggplot(data=d, aes(x=mass_std,y=brain_std)) + 
+  geom_point()+
+  geom_ribbon(data=summary.7.2, inherit.aes = FALSE,aes(x=mass_std, ymin=lower_mu,ymax=upper_mu), fill="blue", alpha=0.2)+
+  geom_line(data=summary.7.2,aes(x=mass_std,y=mean_mu),color="red")
+```
+
+```{r}
+samps.7.3 <- link_df(m7.3,data=tibble(mass_std=seq(from=-1, to=1.5, by=0.1)))
+
+summary.7.3 <- samps.7.3 %>%
+  group_by(mass_std)%>%
+  summarise(mean_mu = mean(mu),
+            lower_mu = quantile(mu,0.1),
+            upper_mu = quantile(mu,0.9)) %>%
+  ungroup() 
+
+ggplot(data=d, aes(x=mass_std,y=brain_std)) + 
+  geom_point()+
+  geom_ribbon(data=summary.7.3, inherit.aes = FALSE,aes(x=mass_std, ymin=lower_mu,ymax=upper_mu), fill="blue", alpha=0.2)+
+  geom_line(data=summary.7.3,aes(x=mass_std,y=mean_mu),color="red")
+```
+```{r}
+samps.7.4 <- link_df(m7.4,data=tibble(mass_std=seq(from=-1, to=1.5, by=0.1)))
+
+summary.7.4 <- samps.7.4 %>%
+  group_by(mass_std)%>%
+  summarise(mean_mu = mean(mu),
+            lower_mu = quantile(mu,0.1),
+            upper_mu = quantile(mu,0.9)) %>%
+  ungroup() 
+
+ggplot(data=d, aes(x=mass_std,y=brain_std)) + 
+  geom_point()+
+  geom_ribbon(data=summary.7.4, inherit.aes = FALSE,aes(x=mass_std, ymin=lower_mu,ymax=upper_mu), fill="blue", alpha=0.2)+
+  geom_line(data=summary.7.4,aes(x=mass_std,y=mean_mu),color="red")
+```
+
+```{r}
+samps.7.5 <- link_df(m7.5,data=tibble(mass_std=seq(from=-1, to=1.5, by=0.1)))
+
+summary.7.5 <- samps.7.5 %>%
+  group_by(mass_std)%>%
+  summarise(mean_mu = mean(mu),
+            lower_mu = quantile(mu,0.1),
+            upper_mu = quantile(mu,0.9)) %>%
+  ungroup() 
+
+ggplot(data=d, aes(x=mass_std,y=brain_std)) + 
+  geom_point()+
+  geom_ribbon(data=summary.7.5, inherit.aes = FALSE,aes(x=mass_std, ymin=lower_mu,ymax=upper_mu), fill="blue", alpha=0.2)+
+  geom_line(data=summary.7.5,aes(x=mass_std,y=mean_mu),color="red")
+```
+
+```{r}
+samps.7.6 <- link_df(m7.6,data=tibble(mass_std=seq(from=-1, to=1.5, by=0.1)))
+
+summary.7.6 <- samps.7.6 %>%
+  group_by(mass_std)%>%
+  summarise(mean_mu = mean(mu),
+            lower_mu = quantile(mu,0.1),
+            upper_mu = quantile(mu,0.9)) %>%
+  ungroup() 
+
+ggplot(data=d, aes(x=mass_std,y=brain_std)) + 
+  geom_point()+
+  geom_ribbon(data=summary.7.6, inherit.aes = FALSE,aes(x=mass_std, ymin=lower_mu,ymax=upper_mu), fill="blue", alpha=0.2)+
+  geom_line(data=summary.7.6,aes(x=mass_std,y=mean_mu),color="red")
+```
+### overfitting fish
+```{r}
+
+load("../Midterm Assessment/ClownFishData.RData")
+data<- data %>% 
+  distinct()%>%
+  rowid_to_column("index")
+ 
+```
+
+Fit the proportion of eggs laid
+```{r}
+m.all <- quap( alist(
+  Eggs_Hatched ~ dbinom(Eggs_Laid,mu) ,
+  mu ~ dunif(0,1)),
+  data=data
+)
+
+precis(m.all)
+```
+
+It's very certain that, on average, 61% of eggs hatch.
+
+```{r}
+sum(data$Eggs_Hatched)/sum(data$Eggs_Laid)
+```
+
+Let's divide the data up into two groups
+```{r}
+data.two <- data %>% mutate(group=ceiling(index/64)) 
+ 
+m.two <- quap( alist(
+  Eggs_Hatched ~ dbinom(Eggs_Laid,mu[group]) ,
+  mu[group] ~ dunif(0,1)),
+  data=data.two
+)
+
+
+precis(m.two, depth=2)
+```
+
+```{r}
+mu.samps<-extract.samples(m.two  )$mu%>% as_tibble()
+
+
+bayesplot::mcmc_intervals(mu.samps) 
+```
+
+
+
+Let's divide the data up into 4 groups
+```{r}
+data.four <- data %>% mutate(group=ceiling(index/32))  
+
+m.four <- quap( alist(
+  Eggs_Hatched ~ dbinom(Eggs_Laid,mu[group]) ,
+  mu[group] ~ dunif(0,1)),
+  data=data.four
+)
+
+
+precis(m.four, depth=2) 
+```
+
+```{r}
+mu.samps<-extract.samples(m.four  )$mu%>% as_tibble()
+
+
+bayesplot::mcmc_intervals(mu.samps)
+```
+
+
+
+
+Let's divide the data up into 8 groups
+```{r}
+data.eight <- data %>% mutate(group=ceiling(index/16))  
+
+m.eight <- quap( alist(
+  Eggs_Hatched ~ dbinom(Eggs_Laid,mu[group]) ,
+  mu[group] ~ dunif(0,1)),
+  data=data.eight
+)
+
+
+precis(m.eight, depth=2) 
+```
+
+```{r}
+mu.samps<-extract.samples(m.eight  )$mu%>% as_tibble()
+
+
+bayesplot::mcmc_intervals(mu.samps)
+```
+
+
+
+Let's divide the data up into 16 groups
+```{r}
+data.sixteen <- data %>% mutate(group=ceiling(index/8))  
+
+m.sixteen <- quap( alist(
+  Eggs_Hatched ~ dbinom(Eggs_Laid,mu[group]) ,
+  mu[group] ~ dunif(0,1)),
+  data=data.sixteen
+)
+
+
+
+mu.samps<-extract.samples(m.sixteen  )$mu%>% as_tibble()
+
+
+bayesplot::mcmc_intervals(mu.samps)
+```
+
+
+
+Let's divide the data up into 32 groups
+```{r}
+data.thirtytwo <- data %>% mutate(group=ceiling(index/4))  
+
+m.thirtytwo <- quap( alist(
+  Eggs_Hatched ~ dbinom(Eggs_Laid,mu[group]) ,
+  mu[group] ~ dunif(0,1)),
+  data=data.thirtytwo
+)
+
+
+
+mu.samps<-extract.samples(m.thirtytwo  )$mu%>% as_tibble()
+
+
+bayesplot::mcmc_intervals(mu.samps) +
+  xlim(0,1)
+```
+
+
+Let's divide the data up into 64 groups
+```{r}
+data.thirtytwo <- data %>% mutate(group=ceiling(index/2))   %>% view()
+
+m.thirtytwo <- quap( alist(
+  Eggs_Hatched ~ dbinom(Eggs_Laid,mu[group]) ,
+  mu[group] ~ dunif(0,1)),
+  data=data.thirtytwo,
+  start=list( mu = rep(0.6,64)),
+  method="Nelder-Mead",
+  control=list(maxit=2000)
+)
+
+ 
+
+mu.samps<-extract.samples(m.thirtytwo  )$mu%>% as_tibble()
+
+
+bayesplot::mcmc_intervals(mu.samps) +
+  xlim(0,1)
+```
+
