@@ -17,7 +17,7 @@ source("../helper.R")
 # Today's objectives:  
 
 *  Understand a bit of entropy  
-*  Calculate the log pointwise divergence (lppd)   
+*  Calculate the log pointwise density (lppd)   
 *  Observe how lppd is expected to change with model complexity   
 *  Learn how to calculate WAIC and LOOIC  
 
@@ -314,7 +314,7 @@ We need to do some processing of the output to make it "tidy" and plottable.
 the name "del" is for delta WAIC.
 ```{r}
 output2<- output %>%
-  mutate(indel.2=in.1-in.2, indel.4=in.2-in.4, indel.8=in.4-in.8) %>%view()
+  mutate(indel.2=in.1-in.2, indel.4=in.2-in.4, indel.8=in.4-in.8) 
 
 out.long <- gather(output2, key="type", value="lppd",2:9)%>%
  separate(type,into=c("in.out","pars")) %>%
