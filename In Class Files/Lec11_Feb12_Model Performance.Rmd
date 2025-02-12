@@ -1,0 +1,508 @@
+---
+title: "Feb 12, Assessing Model Performance"
+author: "Stephen R. Proulx"
+date: "2/12/2025"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(rethinking)
+source("../helper.R")
+
+```
+
+# Today's objectives:  
+
+*  Understand a bit of entropy  
+*  Calculate the log pointwise divergence (lppd)   
+*  Observe how lppd is expected to change with model complexity   
+*  Learn how to calculate WAIC and LOOIC  
+
+## Entropy of genotypes
+
+You all are familiar with Hardy-Weinberg principle that single-locus genotypes should show statistical independence. This means that if the allele frequency of `A` is $p$ and `a` is $q=1-p$, then the frequency of genotype `AA` should be $p^2$, genotype `Aa` at $2 p q$, and genotype `aa` at $q^2$. 
+
+We can calculate the entropy of the genotype frequencies
+
+$$
+H(p) = p^2 * \log(p^2) + 2 p q * \log(2 p q ) +q^2 * \log(q^2) 
+$$
+What does this look like? Let's make a tibble of the entropy, $H$.
+```{r}
+genotype_freqs <- tibble(p=seq(from = 0.01, to = 0.99, by =0.01 ))%>%
+  mutate(q = 1-p , 
+         H = (-1)*(p^2 * log2(p^2) + 2*p*q * log2(2* p* q ) + q^2 * log2(q^2)))
+```
+
+And plot it:
+```{r}
+ggplot(genotype_freqs, aes(x=p,y=H)) +
+  geom_line()
+```
+So entropy is near zero if either allele is very common, and reaches it's maximum value when they are equally frequent. If you walked into a population where $p=0.05$ and sampled an individual at random you would already be fairly certain their genotype would be `AA`. If $p=0.5$ you would expect `Aa` more than `AA` or `aa`, but be fairly uncertain which you would get.  
+
+
+What if we don't know the gene frequency correctly? We can compute the cross-entropy based on the difference in the log probabilities of observing those genotypes.
+```{r}
+ptrue=0.1
+qtrue=0.9
+
+
+cross_ent <- tibble(p=seq(from = 0.01, to = 0.99, by =0.01 ))%>%
+  mutate(q = 1-p , 
+         H = abs(ptrue^2 * (log(ptrue^2)-log(p^2))) + 2*ptrue*qtrue * (log(2* ptrue* qtrue )-log(2* p* q )) + qtrue^2 * (log(qtrue^2)-log(q^2)))
+
+
+
+ggplot(cross_ent, aes(x=p,y=H)) +
+  geom_line()+
+  xlab("proposed probability")
+```
+
+## The path to IC's
+In the lecture and chapter there is a lot of theory on different aspects of assessing model fit. Here is an outline 
+
+1)  out-of-sample cross entropy is a good measure of distance between what the model predicts and reality  
+2)  lppd tells us relative cross-entropy  
+3)  in-sample lppd tends to improve for more complex models  
+4)  the expected difference between in-sample and out-of-sample lppd can be quantified
+5)  IC measures compare in-sample lppd, "penalized" for "parameter number", in order to estimate whether or not out-of-sample lppd is better for one model or another. 
+
+While lppd is the most accurate measure of out-of-sample entropy, other approximations are almost as good and *much* easier to calculate. 
+
+In modern software packages, WAIC and LOOIC can both be efficiently calculated. Both do well at approximating the out-of-sample cross entropy of a model and typically give similar results to each other. 
+
+## Examples of lppd and model complexity
+
+Code in the Rethinking package simulates data and then fits `quap` models with predictors that are not related to the data-generating process. This is a sort of "null model" approach. The models we are fitting should not predict better as we add more parameters, because the models have nothing to do with the data generating process in the first place. So models with more parameters should get better at fitting "in sample" data (they predict the data they are trained on), but do not get better at predicting data they were not trained on.
+
+This is slow to run. I've done it here with only 100 simulations and saved the output. 
+
+DON'T RUN THIS NOW! You may play around with it later if you like, but be warned that it takes a lot of time to run.
+```{r, eval=FALSE}
+## R code 7.16
+N <- 20
+kseq <- 1:5
+reps <- 1e2
+dev <- sapply( kseq , function(k) {
+        print(k);
+        r <- replicate( reps , sim_train_test( N=N, k=k )   );
+        c( mean(r[1,]) , mean(r[2,]) , sd(r[1,]) , sd(r[2,]) )
+    } )
+```
+```{r, eval=FALSE}
+save(dev, file="lppdsim.RData")
+```
+
+
+Load the data that I already ran:
+```{r}
+load("lppdsim.RData")
+```
+ 
+
+And use the code from the book to plot the in-sample and out-of-sample lppd.
+
+Important note: This analysis averages simulations of a certain complexity and then compares that to averaged simulations of a different complexity. It may be better to compare models of alternative complexity for the same simulated data, and then average that.
+```{r}
+N <- 20
+kseq <- 1:5
+## R code 7.18
+plot( 1:5 , dev[1,] , ylim=c( min(dev[1:2,])-5 , max(dev[1:2,])+10 ) ,
+    xlim=c(1,5.1) , xlab="number of parameters" , ylab="deviance" ,
+    pch=16 , col=rangi2 )
+mtext( concat( "N = ",N ) )
+points( (1:5)+0.1 , dev[2,] )
+for ( i in kseq ) {
+    pts_in <- dev[1,i] + c(-1,+1)*dev[3,i]
+    pts_out <- dev[2,i] + c(-1,+1)*dev[4,i]
+    lines( c(i,i) , pts_in , col=rangi2 )
+    lines( c(i,i)+0.1 , pts_out )
+}
+
+```
+
+
+
+## Applying information criteria to assess model fit
+
+Remember our simulated plant data:
+```{r}
+set.seed(71)
+# number of plants
+N <- 100
+
+# simulate initial heights
+h0 <- rnorm(N,10,2)
+
+# assign treatments and simulate fungus and growth
+treatment <- rep( 0:1 , each=N/2 )
+fungus <- rbinom( N , size=1 , prob=0.5 - treatment*0.4 )
+h1 <- h0 + rnorm(N, 5 - 3*fungus)
+
+# compose a clean data frame
+sim_plant_data <- data.frame( h0=h0 , h1=h1 , treatment=treatment , fungus=fungus )
+```
+
+```{r}
+m6.7 <- quap(
+    alist(
+        h1 ~ dnorm( mu , sigma ),
+        mu <- h0 * p,
+        p <- a + bt*treatment + bf*fungus,
+        a ~ dlnorm( 0 , 0.2 ) ,
+        bt ~ dnorm( 0 , 0.5 ),
+        bf ~ dnorm( 0 , 0.5 ),
+        sigma ~ dexp( 1 )
+    ), data=sim_plant_data )
+
+m6.8 <- quap(
+    alist(
+        h1 ~ dnorm( mu , sigma ),
+        mu <- h0 * p,
+        p <- a + bt*treatment,
+        a ~ dlnorm( 0 , 0.2 ),
+        bt ~ dnorm( 0 , 0.5 ),
+        sigma ~ dexp( 1 )
+    ), data=sim_plant_data )
+```
+
+We'll add another model, one that includes fungus but now leaves out the treatment.
+```{r}
+m6.7.2 <- quap(
+    alist(
+        h1 ~ dnorm( mu , sigma ),
+        mu <- h0 * p,
+        p <- a  + bf*fungus,
+        a ~ dlnorm( 0 , 0.2 ) ,
+        bf ~ dnorm( 0 , 0.5 ),
+        sigma ~ dexp( 1 )
+    ), data=sim_plant_data )
+```
+
+How do the models do in terms of lppd?
+```{r}
+c(   (-2)*sum(lppd(m6.8)), (-2)*sum(lppd(m6.7.2)), (-2)*sum(lppd(m6.7)))
+```
+
+
+```{r}
+compare(   m6.7 , m6.8 ,m6.7.2, func=WAIC , n=1e4 )
+```
+
+```{r}
+compare(   m6.7 , m6.8 ,m6.7.2, func=LOO , n=1e4)
+```
+IMPORTANT NOTE: This does not mean model 6.7.2 is the true model, it means that it predicts well without overfitting. 
+
+Why does model 6.7 overfit? Because any in-sample association between treatment and outcome that is independent of fungus is spurious (i.e. it is random, not causal), and won't be shared with out of sample data.
+
+
+## Random fishies
+Here we'll create data similar to our clown fish hatching data, but since it is simulated we will know that there is no difference between the groups that we divide the population up into. 
+
+We make a random training dataset of $2^6=64$ fish parents where the number of eggs laid is random (Poisson) and the number that successfully hatch is binomial with a hatching probability of 0.65. 
+
+We also make a random test dataset in exactly the same way.
+
+For each dataset that is produced we then fit models where we split the parents into smaller and smaller groups and calculate the lppd for the training and test data, and compare the WAIC for the models.
+
+DON"T RUN THIS!!! It takes hours. I ran it and saved the data.
+```{r , eval=FALSE}
+nsims=1000
+output<-tibble(sim.number=seq(nsims) , in.1=0, out.1=0, in.2=0, out.2=0, in.4=0, out.4=0, in.8=0, out.8=0 , del.2=0,del.4=0,del.8=0)
+
+
+for(i in 1:nsims){ 
+      if(i/10==round(i/10)){ print(i)}  
+  
+num=2^6
+data.fish <- tibble(index=seq(num),Eggs_Laid=rpois(num,lambda=100)) %>%
+  mutate(Eggs_Hatched=rbinom(n(),size = Eggs_Laid, prob=0.65),
+         group1=1,
+         group2=ceiling(2* index/num),
+         group4=ceiling(4* index/num),
+         group8=ceiling(8* index/num),
+         group16=ceiling(16* index/num))
+
+data.fish.out <- tibble(index=seq(num),Eggs_Laid=rpois(num,lambda=100)) %>%
+  mutate(Eggs_Hatched=rbinom(n(),size = Eggs_Laid, prob=0.65),
+         group1=1,
+         group2=ceiling(2* index/num),
+         group4=ceiling(4* index/num),
+         group8=ceiling(8* index/num),
+         group16=ceiling(16* index/num))
+
+
+m.all <- quap( alist(
+  Eggs_Hatched ~ dbinom(Eggs_Laid,mu) ,
+  mu ~ dunif(0,1)),
+  data=data.fish,
+  start = list(mu=0.66  )
+)
+
+m.two <- quap( alist(
+  Eggs_Hatched ~ dbinom(Eggs_Laid,mu),
+  mu<- mu1 * (group2==1)+ mu2 * (group2==2),
+  mu1 ~ dunif(0,1),
+  mu2 ~ dunif(0,1)),
+  data=data.fish,
+  start = list(mu1=0.66,mu2=0.66  )
+)
+
+
+m.four <- quap( alist(
+  Eggs_Hatched ~ dbinom(Eggs_Laid,mu),
+  mu<- mu1 * (group4==1)+ mu2 * (group4==2) + mu3 * (group4==3)+ mu4 * (group4==4),
+  mu1 ~ dunif(0,1),
+  mu2 ~ dunif(0,1),
+  mu3 ~ dunif(0,1),
+  mu4 ~ dunif(0,1)),
+  data=data.fish,
+  start = list(mu1=0.66,mu2=0.66,mu3=0.66,mu4=0.66 )
+)
+ 
+m.eight <- quap( alist(
+  Eggs_Hatched ~ dbinom(Eggs_Laid,mu),
+  mu<- mu1 * (group8==1)+ mu2 * (group8==2) + mu3 * (group8==3)+ mu4 * (group8==4)+mu5 * (group8==5)+ mu6 * (group8==6) + mu7 * (group8==7)+ mu8 * (group8==8),
+  mu1 ~ dunif(0,1),
+  mu2 ~ dunif(0,1),
+  mu3 ~ dunif(0,1),
+  mu4 ~ dunif(0,1),
+  mu5 ~ dunif(0,1),
+  mu6 ~ dunif(0,1),
+  mu7 ~ dunif(0,1),
+  mu8 ~ dunif(0,1)),
+  data=data.fish,
+  start = list(mu1=0.66,mu2=0.66,mu3=0.66,mu4=0.66,mu5=0.66,mu6=0.66,mu7=0.66,mu8=0.66)
+)
+
+
+cout <- compare(m.all,m.two,m.four,m.eight)
+
+
+output$in.1[i]<- (-2)*sum(lppd(m.all))
+output$out.1[i]<- (-2)*sum(lppd(m.all,data=data.fish.out))
+output$in.2[i]<- (-2)*sum(lppd(m.two))
+output$out.2[i]<- (-2)*sum(lppd(m.two,data=data.fish.out))
+output$in.4[i]<- (-2)*sum(lppd(m.four))
+output$out.4[i]<- (-2)*sum(lppd(m.four,data=data.fish.out))
+output$in.8[i]<- (-2)*sum(lppd(m.eight))
+output$out.8[i]<- (-2)*sum(lppd(m.eight,data=data.fish.out))
+
+output$del.2[i]<- cout@.Data[[3]][[2]]
+output$del.4[i]<- cout@.Data[[3]][[3]]
+output$del.8[i]<- cout@.Data[[3]][[4]]
+}
+```
+
+```{r , eval=FALSE}
+save(output, file="binomialsim.RData")
+```
+
+
+RUN THIS: Load the data
+```{r}
+load("binomialsim.RData")
+```
+
+
+We need to do some processing of the output to make it "tidy" and plottable.
+the name "del" is for delta WAIC.
+```{r}
+output2<- output %>%
+  mutate(indel.2=in.1-in.2, indel.4=in.2-in.4, indel.8=in.4-in.8) %>%view()
+
+out.long <- gather(output2, key="type", value="lppd",2:9)%>%
+ separate(type,into=c("in.out","pars")) %>%
+  gather(key="type",value="delta",2:4) %>%
+  separate(type,into=c("del","par.delta"))%>%
+  select(-del) %>%
+  gather(key="type",value="indel",2:4) %>%
+  separate(type,into=c("del","par.indel"))%>%
+  select(-del)
+```
+
+
+First, let's look at a similar plot from the book for in- and out- of sample deviance. The more complex models have lower deviance, and the difference between in- and out- deviance grows. 
+```{r}
+ggplot(out.long, aes(x=pars,y=lppd,color=in.out ))+geom_boxplot()
+```
+
+
+But we can also look at how lppd improves as we add parameters, i.e. as we split the data into more groups. Here we compare lppd among models that increase the number of groups, so 2 is compared to 1, 4 is compared to 2, and 8 is compared to 4. This is done for each simulation.  So even though the last figure shows that there is a ton of variance in lppd, and overlap in the distributions between the 1 parameter and 2 parameter model, within a simulation the picture is a bit rosier. Deviance almost always goes down as the number of parameters goes up, but the distribution is fairly spread out.
+```{r}
+ggplot(out.long, aes(x=par.indel,y=indel, group=par.indel ))+
+  geom_boxplot()+
+  labs(x="group being compared",
+       y="Decrease in deviance")
+```
+ 
+
+
+
+Now we show the change in WAIC. This is plotted as the increase in WAIC as the number of parameters increases. Since lower WAIC is better, an increase in WAIC is telling us the model is over-fitting.
+```{r}
+ggplot(out.long, aes(x=par.delta,y=delta ))+
+  geom_boxplot()+
+  labs(x="group being compared",
+       y="increase in WAIC")
+
+```
+
+
+### Random fish, but with some group effects
+Now we'll look at a situation where there is something that causes hatching rate to vary, fish in the first half of the dataset have a higher hatching rate than in the second half. We use the same model to generate the in-sample and out-of-sample data.
+
+
+```{r , eval=FALSE}
+nsims=20
+output<-tibble(sim.number=seq(nsims) , in.1=0, out.1=0, in.2=0, out.2=0, in.4=0, out.4=0, in.8=0, out.8=0 , del.2=0,del.4=0,del.8=0)
+
+
+for(i in 1:nsims){ 
+      if(i/10==round(i/10)){ print(i)}  
+  
+num=2^6
+data.fish <- tibble(index=seq(num),Eggs_Laid=rpois(num,lambda=100)) %>%
+  mutate(Eggs_Hatched=rbinom(n(),size = Eggs_Laid, prob=0.65-(index<=32)*0.2),
+         group1=1,
+         group2=ceiling(2* index/num),
+         group4=ceiling(4* index/num),
+         group8=ceiling(8* index/num),
+         group16=ceiling(16* index/num))
+
+data.fish.out <- tibble(index=seq(num),Eggs_Laid=rpois(num,lambda=100)) %>%
+  mutate(Eggs_Hatched=rbinom(n(),size = Eggs_Laid, prob=0.65-(index<=32)*0.2),
+         group1=1,
+         group2=ceiling(2* index/num),
+         group4=ceiling(4* index/num),
+         group8=ceiling(8* index/num),
+         group16=ceiling(16* index/num))
+
+
+m.all <- quap( alist(
+  Eggs_Hatched ~ dbinom(Eggs_Laid,mu) ,
+  mu ~ dunif(0,1)),
+  data=data.fish,
+  start = list(mu=0.66  )
+)
+
+m.two <- quap( alist(
+  Eggs_Hatched ~ dbinom(Eggs_Laid,mu),
+  mu<- mu1 * (group2==1)+ mu2 * (group2==2),
+  mu1 ~ dunif(0,1),
+  mu2 ~ dunif(0,1)),
+  data=data.fish,
+  start = list(mu1=0.66,mu2=0.66  )
+)
+
+
+m.four <- quap( alist(
+  Eggs_Hatched ~ dbinom(Eggs_Laid,mu),
+  mu<- mu1 * (group4==1)+ mu2 * (group4==2) + mu3 * (group4==3)+ mu4 * (group4==4),
+  mu1 ~ dunif(0,1),
+  mu2 ~ dunif(0,1),
+  mu3 ~ dunif(0,1),
+  mu4 ~ dunif(0,1)),
+  data=data.fish,
+  start = list(mu1=0.66,mu2=0.66,mu3=0.66,mu4=0.66 )
+)
+ 
+m.eight <- quap( alist(
+  Eggs_Hatched ~ dbinom(Eggs_Laid,mu),
+  mu<- mu1 * (group8==1)+ mu2 * (group8==2) + mu3 * (group8==3)+ mu4 * (group8==4)+mu5 * (group8==5)+ mu6 * (group8==6) + mu7 * (group8==7)+ mu8 * (group8==8),
+  mu1 ~ dunif(0,1),
+  mu2 ~ dunif(0,1),
+  mu3 ~ dunif(0,1),
+  mu4 ~ dunif(0,1),
+  mu5 ~ dunif(0,1),
+  mu6 ~ dunif(0,1),
+  mu7 ~ dunif(0,1),
+  mu8 ~ dunif(0,1)),
+  data=data.fish,
+  start = list(mu1=0.66,mu2=0.66,mu3=0.66,mu4=0.66,mu5=0.66,mu6=0.66,mu7=0.66,mu8=0.66)
+)
+
+
+cout <- compare(m.all,m.two,m.four,m.eight,sort=F)
+
+
+output$in.1[i]<- (-2)*sum(lppd(m.all))
+output$out.1[i]<- (-2)*sum(lppd(m.all,data=data.fish.out))
+output$in.2[i]<- (-2)*sum(lppd(m.two))
+output$out.2[i]<- (-2)*sum(lppd(m.two,data=data.fish.out))
+output$in.4[i]<- (-2)*sum(lppd(m.four))
+output$out.4[i]<- (-2)*sum(lppd(m.four,data=data.fish.out))
+output$in.8[i]<- (-2)*sum(lppd(m.eight))
+output$out.8[i]<- (-2)*sum(lppd(m.eight,data=data.fish.out))
+
+#need to get the order right
+output$del.2[i]<- -cout@.Data[[1]][[1]]+cout@.Data[[1]][[2]]
+output$del.4[i]<- -cout@.Data[[1]][[2]]+cout@.Data[[1]][[3]]
+output$del.8[i]<- -cout@.Data[[1]][[3]]+cout@.Data[[1]][[4]]
+}
+```
+
+ 
+```{r , eval=FALSE}
+save(output, file="binomialsim2.RData")
+```
+
+
+RUN THIS: Load the data
+```{r}
+load("binomialsim2.RData")
+```
+
+We need to do some processing of the output to make it "tidy" and plottable.
+```{r}
+output.effect<- output %>%
+  mutate(indel.2=in.1-in.2, indel.4=in.2-in.4, indel.8=in.4-in.8)
+
+out.long.effect <- gather(output.effect, key="type", value="lppd",2:9)%>%
+ separate(type,into=c("in.out","pars")) %>%
+  gather(key="type",value="delta",2:4) %>%
+  separate(type,into=c("del","par.delta"))%>%
+  select(-del) %>%
+  gather(key="type",value="indel",2:4) %>%
+  separate(type,into=c("del","par.indel"))%>%
+  select(-del)
+```
+
+
+Now we see that the model with group has much worse accuracy in sample than the models that correctly allow the first 32 fish to have a different hatching rate than the second 32 fish. Out of sample accuracy is also way better for the models with more parameters. 
+```{r}
+ggplot(out.long.effect, aes(x=pars,y=lppd,color=in.out ))+geom_boxplot()
+```
+
+Just to see more clearly we can zoom in, and see that out-of-sample is getting a little worse as the number of parameters goes up.
+```{r}
+ggplot(out.long.effect, aes(x=pars,y=lppd,color=in.out ))+geom_boxplot() +
+  ylim(c(350,410))
+```
+
+
+
+
+Now we show the change in WAIC. This is plotted as the increase in WAIC as the number of parameters increases. Since lower WAIC is better, we see that model 2 is a big improvement from model 1, but models 4 and 8 are not better..
+```{r}
+ggplot( out.long.effect , aes(x=par.delta,y=delta , group=par.delta))+
+  geom_boxplot()+
+  ylim(c(-400,8))+
+  labs(x="group being compared",
+       y="increase in WAIC")
+
+```
+Again we can zoom in and see the difference between models 2 and 4, and between models 4 and 8. On the WAIC scale, models 4 and 8 get worse, not better. 
+```{r}
+ggplot( out.long.effect , aes(x=par.delta,y=delta , group=par.delta))+
+  geom_boxplot()+
+  ylim(c(0,8))+
+  labs(x="group being compared",
+       y="increase in WAIC")
+
+```
