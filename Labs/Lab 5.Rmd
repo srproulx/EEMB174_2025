@@ -1,0 +1,45 @@
+---
+title: "Lab 5"
+author: "Stephen R. Proulx"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(rethinking)
+```
+# Bayesian Statistical Modeling Winter 2025
+# Lab Exercise, Week 6
+
+*When is this lab due?* Labs are due on the Thursday after they are assigned. However, in many cases you can complete them during the lab period itself.   This assignment is due on Thursday, 2/20/2025.  
+
+## Remember Hydroxychloroquine?
+Hydroxychloroquine had a few news cycles last spring. Following the first news that it might benefit hospitlized covid patients, an early trial on patients in the hospital with covid was realeased  ( full data here: https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7556078/). 
+
+They had patients who either received no drug treatment, received Hydroxychloroquine, or Hydroxychloroquine+Azithromycin. The results were
+
+no drugs: 18 died, 140 discharged 
+HC : 27 died, 70 discharged
+HC+AZ: 25 died, 88 discharged. 
+
+Your goal is to create a model that will allow you to assess the affect of the drug. To do this, we will want to create multiple models that differ in how many parameters they have. The "simplest" model should have one parameter describing the probability of death/discharge for all patients, regardless of drug treatment. More complex models can have distinct effects of having HC or AZ. 
+
+Write out your model in statistical notation, with priors, before computing it. One important techique for computing the model is to note that you can use `(x==i)` type statements within `quap` to determine which parameter gets applied. This works better than `theta[group]` type statements.
+
+Once you have your models, compare them using WAIC. 
+
+
+
+
+
+## Alternative model formulation
+Instead of setting distinct parameters for the groups, you could also choose to set a global mean parameter and then model the difference from that. Something like this:
+`y ~ dnorm(mu,sigma),`
+`mu <- a + (group==1)*deltamu  - (group==2)*deltamu`
+
+
+Once you have the `quap` object, you can then use `mutate` to convert back to the group-specific mean values. 
+
+ 
