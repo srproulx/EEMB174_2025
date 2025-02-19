@@ -1,0 +1,626 @@
+---
+title: "Interaction Effects"
+author: "Stephen R. Proulx"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(rethinking)
+source("../helper.R")
+
+```
+
+# Today's objectives:  
+
+* Construct models with interaction terms
+* Develop an understanding of how interaction models differ from conducting separate analyses
+* learn about alternative formulations of interaction effect models 
+
+## National GDP and ruggedness of terrain
+
+Load the data and do a little processing.
+```{r load_process_data}
+data(rugged)
+d <- as_tibble(rugged)
+
+
+# make log version of outcome and  extract countries with GDP data
+d <- d %>% 
+  mutate(log_gdp = log(rgdppc_2000))%>%
+  drop_na(rgdppc_2000) %>% 
+  mutate(log_gdp_std=log_gdp/mean(log_gdp), rugged_std = rugged/max(rugged)) %>%
+  select(log_gdp,rugged,log_gdp_std,rugged_std,country, cont_africa)
+```
+
+
+
+Look at the data:
+```{r}
+
+ggplot(d,aes(x = rugged_std)) +
+  geom_point(aes(y = log_gdp, color = as.factor(cont_africa)),
+             size = 2/3) +
+  xlab("Terrain Ruggedness Index" ) +
+  ylab("log GDP from year 2000") 
+
+```
+ 
+### Separate models
+Run two separate models, one for non-African countries, the other for African countries. 
+
+The model is:
+$$
+\mathrm{log\_gdp} \sim \mathrm{Normal}(\mu,\sigma) \\
+\mu = a + b * \mathrm{rugged\_std} \\
+a \sim \mathrm{Normal}(1,1) \\
+b \sim \mathrm{Normal}(0,1) \\
+\sigma \sim \mathrm{Exponential}(1)
+$$
+
+```{r}
+m7.1 <-
+  quap(alist(
+    log_gdp ~ dnorm( mu , sigma ),
+    mu <- a+b*rugged_std,
+    a  ~ dnorm(1,1),
+    b  ~ dnorm(0,1),
+    sigma ~ dexp(1)
+  ), data=filter(d,cont_africa==1) )
+
+
+m7.2 <-
+  quap(alist(
+    log_gdp  ~ dnorm( mu , sigma ),
+    mu <- a+b*rugged_std,
+    a  ~ dnorm(1,1),
+    b  ~ dnorm(0,1),
+    sigma ~ dexp(1)
+  ), data=filter(d,cont_africa==0) )
+
+
+precis(m7.1)
+precis(m7.2)
+
+```
+
+
+Look at the precis, examine the parameter estimates, and make a note of the estimates for sigma as well.
+
+
+Here's some code to visualize this. It looks long and complicated, but you've used parts of this before. We just need to do some extra work to be able to plot the Africa/non-Africa countries on the same graph.
+
+Take a minute to read through the code and make sure that you follow what is being done:
+```{r}
+nd <- 
+  tibble(rugged_std = seq(from = 0, to = 0.8, length.out = 30))
+
+f_m7.1 <-
+  link_df(m7.1, data = nd) %>%
+  as_tibble() %>%
+  group_by(rugged_std) %>%
+  summarise(mean_mu=mean(mu),
+            lower_mu=quantile(mu,0.1),
+            upper_mu=quantile(mu,0.9))%>%
+  ungroup()%>%
+  mutate(cont_africa = 1)  
+  
+
+f_m7.2 <-
+  link_df(m7.2, data = nd) %>%
+  as_tibble() %>%
+  group_by(rugged_std) %>%
+  summarise(mean_mu=mean(mu),
+            lower_mu=quantile(mu,0.1),
+            upper_mu=quantile(mu,0.9))%>%
+  ungroup()%>%
+  mutate(cont_africa =0)  
+
+#put them back into a single data-frame for plotting purposes
+f <-
+  bind_rows(f_m7.1, f_m7.2) 
+
+ 
+ggplot(d,aes(x = rugged_std)) +
+  geom_point(aes(y = log_gdp, color = as.factor(cont_africa)),
+             size = 2/3) +
+  geom_smooth(data = f,
+              aes(y = mean_mu, ymin = lower_mu, ymax = upper_mu,
+                  fill = as.factor(cont_africa), color = as.factor(cont_africa)),
+              stat = "identity", 
+              alpha = 1/4, size = 1/2)+
+  xlab("Terrain Ruggedness Index" ) +
+  ylab("log GDP from year 2000") 
+
+```
+
+
+### Models with interaction terms
+In this section we will use all the data at once. 
+
+We will build up to an interaction model, starting with less complex models and adding terms. For model 7.3 we want:
+
+$$
+\mathrm{log\_gdp} \sim \mathrm{Normal}(\mu,\sigma) \\
+\mu = a + b * \mathrm{rugged\_std} \\
+a \sim \mathrm{Normal}(1,1) \\
+b \sim \mathrm{Normal}(0,1) \\
+\sigma \sim \mathrm{Exponential}(1)
+$$
+
+For model 7.4 we want:
+$$
+\mathrm{log\_gdp} \sim \mathrm{Normal}(\mu,\sigma) \\
+\mu = a + ac * \mathrm{cont\_Africa} + br * \mathrm{rugged\_std}  \\
+a \sim \mathrm{Normal}(?,1) \\
+ac \sim \mathrm{Normal}(?,1) \\
+br \sim \mathrm{Normal}(?,1) \\
+\sigma \sim \mathrm{Exponential}(1)
+$$
+
+
+I'm going to specify m7.5 slightly differently than in the book, and explain later:
+$$
+\mathrm{log\_gdp} \sim \mathrm{Normal}(\mu,\sigma) \\
+\mu = anA*(1-\mathrm{cont\_Africa}) +aA*(\mathrm{cont\_Africa}) \\
++ brnA * \mathrm{rugged\_std}*(1-\mathrm{cont\_Africa}) + brA *\mathrm{rugged\_std}* \mathrm{cont\_Africa} \\
+anA \sim \mathrm{Normal}(?,1) \\
+aA \sim \mathrm{Normal}(?,1) \\
+brnA \sim \mathrm{Normal}(?,1) \\
+brA \sim \mathrm{Normal}(?,1) \\
+\sigma \sim \mathrm{Exponential}(1)
+$$
+
+
+Write separate `quap` calls to get posterior distributions for each of these models.
+
+
+```{r}
+m7.3 <-
+  quap(alist(
+    log_gdp ~ dnorm( mu , sigma ),
+    mu <- a+br*rugged_std,
+    a  ~ dnorm(1,1),
+    br ~ dnorm(0,1),
+    sigma ~ dexp(1)
+  ), data=d)
+
+
+m7.4 <-
+  quap(alist(
+    log_gdp ~ dnorm( mu , sigma ),
+    mu <- a + ac * cont_africa + br*rugged_std ,
+    a  ~ dnorm(1,1),
+    ac  ~ dnorm(0,1),
+    br  ~ dnorm(0,1),
+    sigma ~ dexp(1)
+  ), data=d)
+
+m7.5 <-
+  quap(alist(
+    log_gdp  ~ dnorm( mu , sigma ),
+    mu <- anA*(1-cont_africa) + aA* cont_africa  + brnA*rugged_std*(1-cont_africa) + brA *rugged_std* cont_africa,
+   anA  ~ dnorm(1,1), 
+    aA  ~ dnorm(1,1),
+    brnA  ~ dnorm(0,1),
+    brA  ~ dnorm(0,1),
+    sigma ~ dexp(1)
+  ), data=d )
+
+```
+```{r}
+precis(m7.5)
+```
+
+
+Now use compare to see how they stack up in terms of WAIC.
+```{r}
+ compare(m7.3,m7.4,m7.5 ) 
+```
+
+
+
+In addition to the fact that WAIC suggests m7.5 is an improvement, we can ask if m7.5 shows different slopes depending on continents. We can see this by taking the contrast between the slopes, and see that they do differ.
+
+First consider the plots of the posterior:
+```{r}
+mcmc_areas(rethinking::extract.samples(m7.5)%>%
+             as.tibble%>%
+             select(brnA,brA),
+           prob = 0.89)
+```
+
+We would really like to know how the b's differ for each row in our posterior, and then summarize that. This difference is a "contrast". It shows that they are more different than you might think just by looking at the above marginal density plots.
+
+```{r}
+mcmc_areas(rethinking::extract.samples(m7.5)%>%
+             as.tibble%>%
+             select(brnA,brA)%>%
+             mutate(delbr=brnA-brA)%>%
+             select(delbr),
+           prob = 0.89)
+```
+
+
+And now let's see how the predictions differ between the interaction model with the "run them separately model." What are these models doing the same or differently? The only difference is that sigma is estimated separately for the groups of countries. 
+```{r}
+nd1 <- 
+  tibble(rugged_std = seq(from = 0, to = 0.8, length.out = 30),cont_africa=0)
+nd2 <- 
+  tibble(rugged_std = seq(from = 0, to = 0.8, length.out = 30),cont_africa=1)
+
+
+f_m7.5_A <-
+  link_df(m7.5,  data = nd1) %>%
+  as_tibble() %>%  
+  group_by(rugged_std) %>%
+  summarise(mean_mu=mean(mu),
+            lower_mu=quantile(mu,0.1),
+            upper_mu=quantile(mu,0.9))%>%
+  ungroup()%>%
+  mutate(cont_africa =0,
+         model="regular")  
+  
+
+f_m7.5_N <-
+  link_df(m7.5,  data = nd2) %>%
+  as_tibble() %>%  
+  group_by(rugged_std) %>%
+  summarise(mean_mu=mean(mu),
+            lower_mu=quantile(mu,0.1),
+            upper_mu=quantile(mu,0.9))%>%
+  ungroup()%>%
+  mutate(cont_africa =1,
+         model="regular")  
+
+#put them back into a single data-frame for plotting purposes
+f_7.5 <-
+  bind_rows(f_m7.5_A, f_m7.5_N) 
+
+
+
+
+
+ggplot(d,aes(x = rugged_std)) +
+  geom_smooth(data = f_7.5,
+              aes(y = mean_mu, ymin = lower_mu, ymax = upper_mu,
+                 fill = as.factor(cont_africa), color = as.factor(cont_africa+2)),
+              stat = "identity") +
+    geom_smooth(data = f,
+              aes(y = mean_mu, ymin = lower_mu, ymax = upper_mu,
+                  fill = as.factor(cont_africa), color = as.factor(cont_africa)),
+              stat = "identity")+ 
+  scale_x_continuous("Terrain Ruggedness Index", expand = c(0, 0)) +
+  ylab("log GDP from year 2000") +
+  theme(text = element_text(family = "Times"))  
+
+
+
+
+```
+
+### Can we compare the "run them separately" model with the "run them together" model?
+We can do a bit better to see how these models compare with each other by writing a model that includes all the data, but allows for sigma to vary by continent.
+```{r}
+
+m7.5.sigma <-
+  quap(alist(
+    log_gdp  ~ dnorm( mu , sigma ),
+    mu <- anA*(1-cont_africa) + aA* cont_africa + brnA*rugged_std*(1-cont_africa) + brA *rugged_std* cont_africa,
+    sigma <- sigmanA*(1-cont_africa) + sigmaA* cont_africa,
+    anA  ~ dnorm(1,1), 
+    aA  ~ dnorm(1,1),
+    brnA  ~ dnorm(0,1),
+    brA  ~ dnorm(0,1),
+    sigmanA ~ dexp(1),
+    sigmaA ~ dexp(1)
+  ), data=d)
+
+```
+
+```{r}
+compare(m7.5, m7.5.sigma)
+```
+
+
+How do their predictions compare?
+ 
+```{r}
+nd1 <- 
+  tibble(rugged_std = seq(from = 0, to = 0.8, length.out = 30),cont_africa=0)
+nd2 <- 
+  tibble(rugged_std = seq(from = 0, to = 0.8, length.out = 30),cont_africa=1)
+
+
+f_m7.5_sigma_A <-
+  link_df(m7.5.sigma,  data = nd1) %>%
+  as_tibble() %>%  
+  group_by(rugged_std) %>%
+  summarise(mean_mu=mean(mu),
+            lower_mu=quantile(mu,0.1),
+            upper_mu=quantile(mu,0.9))%>%
+  ungroup()%>%
+  mutate(cont_africa =0,
+         model="sigma")  
+  
+
+f_m7.5_sigma_N <-
+  link_df(m7.5.sigma,  data = nd2) %>%
+  as_tibble() %>%  
+  group_by(rugged_std) %>%
+  summarise(mean_mu=mean(mu),
+            lower_mu=quantile(mu,0.1),
+            upper_mu=quantile(mu,0.9))%>%
+  ungroup()%>%
+  mutate(cont_africa =1,
+         model="sigma")  
+
+#put them back into a single data-frame for plotting purposes
+f_7.5_sigma <-
+  bind_rows(f_m7.5_sigma_A, f_m7.5_sigma_N) 
+
+#join the two model predictions
+
+f_7.5_joined <- bind_rows(f_7.5,f_7.5_sigma)
+
+
+
+
+ggplot(filter(f_7.5_joined),aes(x = rugged_std)) +
+  geom_smooth(aes(y = mean_mu, ymin = lower_mu, ymax = upper_mu,
+                 fill = as.factor(model), color = as.factor(model)),
+              stat = "identity") +
+  scale_x_continuous("Terrain Ruggedness Index", expand = c(0, 0)) +
+  ylab("log GDP from year 2000") +
+  theme(text = element_text(family = "Times"))  +
+  facet_wrap(~cont_africa)
+
+
+
+
+```
+
+
+###Compare with the alternative formulation
+In the video lecture, McElreath talks about the standard way to formulate interaction models, and I recreate this here. Later we will see in more detail how to formulate models that consider differences rather as a way to have more meaningful priors. 
+
+```{r}
+
+m7.5 <-
+  quap(alist(
+    log_gdp  ~ dnorm( mu , sigma ),
+    mu <- anA*(1-cont_africa) + aA* cont_africa  + brnA*rugged_std*(1-cont_africa) + brA *rugged_std* cont_africa,
+   anA  ~ dnorm(1,1), 
+    aA  ~ dnorm(1,1),
+    brnA  ~ dnorm(0,1),
+    brA  ~ dnorm(0,1),
+    sigma ~ dexp(1)
+  ), data=d )
+
+m7.5.alt <-
+  quap(alist(
+    log_gdp  ~ dnorm( mu , sigma ),
+    mu <- aglobal + bA* cont_africa  +  br*rugged_std  + brXA *rugged_std* cont_africa,
+    aglobal  ~ dnorm(1,1), 
+    bA  ~ dnorm(0,1),
+    br  ~ dnorm(0,1),
+    brXA  ~ dnorm(0,1),
+    sigma ~ dexp(1)
+  ), data=d )
+
+```
+
+
+They do come out a little bit different from each other, but this is all the priors as we'll see.
+```{r}
+precis(m7.5.alt)
+precis(m7.5)
+
+```
+
+
+And now plot the estimates of mu.
+```{r}
+
+nd1 <- 
+  tibble(rugged_std = seq(from = 0, to = 1, length.out = 30),cont_africa=0)
+nd2 <- 
+  tibble(rugged_std = seq(from = 0, to = 1, length.out = 30),cont_africa=1)
+
+
+f_m7.5_A <-
+  link_df(m7.5,  data = nd1) %>%
+  as_tibble() %>%  
+  group_by(rugged_std) %>%
+  summarise(mean_mu=mean(mu),
+            lower_mu=quantile(mu,0.1),
+            upper_mu=quantile(mu,0.9))%>%
+  ungroup()%>%
+  mutate(cont_africa =0,
+         model="regular")  
+  
+
+f_m7.5_N <-
+  link_df(m7.5,  data = nd2) %>%
+  as_tibble() %>%  
+  group_by(rugged_std) %>%
+  summarise(mean_mu=mean(mu),
+            lower_mu=quantile(mu,0.1),
+            upper_mu=quantile(mu,0.9))%>%
+  ungroup()%>%
+  mutate(cont_africa =1,
+         model="regular")  
+
+#put them back into a single data-frame for plotting purposes
+f_7.5  <-
+  bind_rows(f_m7.5_A, f_m7.5_N) 
+
+f_m7.5_alt_A <-
+  link_df(m7.5.alt,  data = nd1) %>%
+  as_tibble() %>%  
+  group_by(rugged_std) %>%
+  summarise(mean_mu=mean(mu),
+            lower_mu=quantile(mu,0.1),
+            upper_mu=quantile(mu,0.9))%>%
+  ungroup()%>%
+  mutate(cont_africa =0,
+         model="alt")  
+  
+
+f_m7.5_alt_N <-
+  link_df(m7.5.alt,  data = nd2) %>%
+  as_tibble() %>%  
+  group_by(rugged_std) %>%
+  summarise(mean_mu=mean(mu),
+            lower_mu=quantile(mu,0.1),
+            upper_mu=quantile(mu,0.9))%>%
+  ungroup()%>%
+  mutate(cont_africa =1,
+         model="alt")  
+
+#put them back into a single data-frame for plotting purposes
+f_7.5_alt <-
+  bind_rows(f_m7.5_alt_A, f_m7.5_alt_N) 
+
+#join the two model predictions
+
+f_7.5_joined <- bind_rows(f_7.5,f_7.5_alt)
+
+
+
+
+ggplot(filter(f_7.5_joined),aes(x = rugged_std)) +
+  geom_smooth(aes(y = mean_mu, ymin = lower_mu, ymax = upper_mu,
+                 fill = as.factor(model), color = as.factor(model)),
+              stat = "identity") +
+  scale_x_continuous("Terrain Ruggedness Index", expand = c(0, 0)) +
+  ylab("log GDP from year 2000") +
+  theme(text = element_text(family = "Times"))  +
+  facet_wrap(~cont_africa)
+
+
+
+
+```
+
+So the alternative model gets more of a slope out of Africa and more of an intercept in Africa. That said, overall they really do perform quite similarly, especially over the range where there is lots of data.
+
+We'll loosen up the priors and see how they change
+```{r}
+
+m7.5 <-
+  quap(alist(
+    log_gdp  ~ dnorm( mu , sigma ),
+    mu <- anA*(1-cont_africa) + aA* cont_africa  + brnA*rugged_std*(1-cont_africa) + brA *rugged_std* cont_africa,
+   anA  ~ dnorm(1,10), 
+    aA  ~ dnorm(1,10),
+    brnA  ~ dnorm(0,10),
+    brA  ~ dnorm(0,10),
+    sigma ~ dexp(10)
+  ), data=d )
+
+m7.5.alt <-
+  quap(alist(
+    log_gdp  ~ dnorm( mu , sigma ),
+    mu <- aglobal + bA* cont_africa  +  br*rugged_std  + brXA *rugged_std* cont_africa,
+    aglobal  ~ dnorm(1,10), 
+    bA  ~ dnorm(0,10),
+    br  ~ dnorm(0,10),
+    brXA  ~ dnorm(0,10),
+    sigma ~ dexp(10)
+  ), data=d )
+
+```
+
+
+Now they are more similar (you need to do some subtraction to completely see this)
+```{r}
+precis(m7.5.alt)
+precis(m7.5)
+
+```
+ 
+```{r}
+
+nd1 <- 
+  tibble(rugged_std = seq(from = 0, to = 1, length.out = 30),cont_africa=0)
+nd2 <- 
+  tibble(rugged_std = seq(from = 0, to = 1, length.out = 30),cont_africa=1)
+
+
+f_m7.5_A <-
+  link_df(m7.5,  data = nd1) %>%
+  as_tibble() %>%  
+  group_by(rugged_std) %>%
+  summarise(mean_mu=mean(mu),
+            lower_mu=quantile(mu,0.1),
+            upper_mu=quantile(mu,0.9))%>%
+  ungroup()%>%
+  mutate(cont_africa =0,
+         model="regular")  
+  
+
+f_m7.5_N <-
+  link_df(m7.5,  data = nd2) %>%
+  as_tibble() %>%  
+  group_by(rugged_std) %>%
+  summarise(mean_mu=mean(mu),
+            lower_mu=quantile(mu,0.1),
+            upper_mu=quantile(mu,0.9))%>%
+  ungroup()%>%
+  mutate(cont_africa =1,
+         model="regular")  
+
+#put them back into a single data-frame for plotting purposes
+f_7.5  <-
+  bind_rows(f_m7.5_A, f_m7.5_N) 
+
+f_m7.5_alt_A <-
+  link_df(m7.5.alt,  data = nd1) %>%
+  as_tibble() %>%  
+  group_by(rugged_std) %>%
+  summarise(mean_mu=mean(mu),
+            lower_mu=quantile(mu,0.1),
+            upper_mu=quantile(mu,0.9))%>%
+  ungroup()%>%
+  mutate(cont_africa =0,
+         model="alt")  
+  
+
+f_m7.5_alt_N <-
+  link_df(m7.5.alt,  data = nd2) %>%
+  as_tibble() %>%  
+  group_by(rugged_std) %>%
+  summarise(mean_mu=mean(mu),
+            lower_mu=quantile(mu,0.1),
+            upper_mu=quantile(mu,0.9))%>%
+  ungroup()%>%
+  mutate(cont_africa =1,
+         model="alt")  
+
+#put them back into a single data-frame for plotting purposes
+f_7.5_alt <-
+  bind_rows(f_m7.5_alt_A, f_m7.5_alt_N) 
+
+#join the two model predictions
+
+f_7.5_joined <- bind_rows(f_7.5,f_7.5_alt)
+
+
+
+
+ggplot(filter(f_7.5_joined),aes(x = rugged_std)) +
+  geom_smooth(aes(y = mean_mu, ymin = lower_mu, ymax = upper_mu,
+                 fill = as.factor(model), color = as.factor(model)),
+              stat = "identity") +
+  scale_x_continuous("Terrain Ruggedness Index", expand = c(0, 0)) +
+  ylab("log GDP from year 2000") +
+  theme(text = element_text(family = "Times"))  +
+  facet_wrap(~cont_africa)
+
+
+
+
+```
