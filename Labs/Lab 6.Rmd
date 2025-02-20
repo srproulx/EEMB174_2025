@@ -225,3 +225,109 @@ How do you think the algorithm did on this surface?
 Make up your own "population size surface". You can make it longer or shorter. Create a set of plots as we did for the other surfaces and gauge how well the algorithm was able to match your function.
 
 
+
+### Using Ulam to run MCMC models
+`ulam` uses syntax that is based on the same principles as `quap`. The main difference is that we can specify how many separate chains we want to run and how many samples to generate from that chain. 
+
+We will run the example of estimating human height regressed on weight.  First load the data and create standardized versions of the variables:
+```{r}
+data("Howell1")
+d<-Howell1
+d2<- as_tibble(d)%>% filter(age>=18)%>%
+  mutate(heightS=standardize(height),weightS=standardize(weight))
+```
+
+
+Now run the `ulam` model. The syntax is almost the same as for `quap`, with the addition of instructions for how to run the mcmc algorithm. These include how many interations and chains, and also to store the log likelihood in order to calculate things like WAIC and LOOIC later.
+```{r}
+ulam_model_height <- ulam(
+  alist(
+    heightS ~ dnorm( mu , sigma ) ,
+    mu <- a +bw*weightS,
+    a ~ dnorm( 0 , 4 ) ,
+    bw ~ dnorm(0,3),
+    sigma ~ dunif( 0 , 50 ) 
+  ) , data=d2 , iter=3000, cores=4, chains = 4,log_lik = T)
+```
+
+
+We can still use `precis` to see a summary:
+```{r}
+precis(ulam_model_height)
+```
+
+The output is similar to when we run `quap`, but we have two new columns, `n_eff` and `Rhat`.
+
+`n_eff` is a measure of how many independent samples from the posterior we have. It is an attempt to correct for correlations in the data. If `n_eff` is small compared to the number of iterations you ran, there may be a problem. Here we ran 3000*4 iterations, but half of them were in the warm up phase and not included. So the algorithm will return 6000 samples. The effective number of samples will be less than this, and this reduction reflects the efficiency of the Hamiltonian Monte Carlo method. We would like `n_eff` to generally be above 1000. Remember when we did the simulations of the Metropolis algorithm, we needed like 1000 samples to get a pretty good match for a simple surface.
+
+`Rhat` is a measure of how much agreement between chains there is, and is supposed to tell you that the Markov chains have "converged". When this number is above 1 then there may be a problem. In practice it is often between 1 and 1.1.
+
+Let's take a closer look at what actually comes out of the stan run. The object that we get out of `ulam` has a bunch of extra information attached to it, but for now we just want to see the samples that came out of the algorithm. We take the `@stanfit` part of the `ulam` object. Then we use the `rstan::extract` function to get a dataframe that has all of the samples. It has a column for each parameter we are fitting and as many rows as were sampled (in this case 500).
+```{r}
+stanfit.ulam_model_height <- ulam_model_height@stanfit
+
+(posterior.samples <- rstan::extract(stanfit.ulam_model_height) %>% as_tibble())
+
+```
+
+
+Now we have our samples, and like before we can work directly with them. For instance we can plot a histogram of the intercept values:
+```{r}
+ggplot(posterior.samples,aes(x=a))+geom_histogram(bins=20)
+```
+
+#### A model where the intercept also depends on sex
+Now we want to continue to use ulam but for a more involved model where height is a linear function of weight, but the intercept depends on sex. Draw the picture of what you want your models to be able to do and then write the ulam function (use log_lik=T)
+
+
+```{r}
+ulam_model_height_sex_varint <- ulam(
+  alist(
+   CODE HERE
+    sigma ~ dunif( 0 , 50 ) 
+  ) , data=d2 , iter=3000, cores=4, chains = 4,log_lik = T)
+```
+
+```{r}
+precis(ulam_model_height_sex_varint)
+```
+
+
+#### A model where the slope depends on sex, but not the intercept
+For this model, height is a linear function of weight, but the slope depends on sex. Draw the picture of what you want your models to be able to do and then write the ulam function (use log_lik=T)
+
+```{r}
+ulam_model_height_sex_varslope <- ulam(
+  alist(
+   CODE HERE
+    sigma ~ dunif( 0 , 50 ) 
+  ) , data=d2 , iter=3000, cores=4, chains = 4,log_lik = T)
+```
+
+
+#### A "full interaciton" model of height as a function of weight and sex
+Now we want to continue to use ulam but for a more involved model with an interaction between weight and sex. The idea is to consider a scenario where the linear regression depends on sex, basically that we have two separate linear regressions, one for female people and the other for male people. You can code this by using an indicator variable of male/not male to multiply by the parameters that apply to male or female individuals. 
+
+
+```{r}
+ulam_model_heightXsex <- ulam(
+  alist(
+    heightS ~ dnorm( mu , sigma ) ,
+    mu <- af*(1-male) +am*male + bf*(1-male)*weightS+bm*male*weightS,
+    af ~ dnorm( 0 , 4 ) ,
+    am ~ dnorm(0,4),
+    bf ~ dnorm(0,3),
+    bm ~ dnorm(0,3),
+    sigma ~ dunif( 0 , 50 ) 
+  ) , data=d2 , iter=3000, cores=4, chains = 4,log_lik = T)
+```
+
+```{r}
+precis(ulam_model_heightXsex)
+```
+
+#### Compare the WAIC of these models
+Now use the 'compare' function to compare these models based on their WAIC. What does it show?
+
+
+
