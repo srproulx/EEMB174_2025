@@ -265,7 +265,7 @@ The output is similar to when we run `quap`, but we have two new columns, `n_eff
 
 Let's take a closer look at what actually comes out of the stan run. The object that we get out of `ulam` has a bunch of extra information attached to it, but for now we just want to see the samples that came out of the algorithm. We take the `@stanfit` part of the `ulam` object. Then we use the `rstan::extract` function to get a dataframe that has all of the samples. It has a column for each parameter we are fitting and as many rows as were sampled (in this case 500).
 ```{r}
-posterior.samples <- rethinking::extract.samples( ulam_model_height@stanfit) %>% as_tibble()
+posterior.samples <- rethinking::extract.samples( ulam_model_height@cstanfit) %>% as_tibble()
 
 ```
 
