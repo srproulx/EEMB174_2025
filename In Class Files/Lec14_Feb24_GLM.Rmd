@@ -1,0 +1,210 @@
+---
+title: "Feb 23, GLM"
+author: "Stephen R. Proulx"
+date: "2/22/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(rethinking)
+source("../helper.R")
+```
+
+# Today's objectives:  
+* Learn some basic ways to diagnose and regularize your Markov chains
+* Understand how GLMs are built
+* Learn how to perform a simple GLM using the binomial and the Poisson likelihood function 
+
+
+
+## GLMs
+The basic idea is that we have a likelihood that matches our data type, and then develop an additive model for underlying parameters, and connect the two with a "link" function. The value in this is that the additive model portion is often something that we can have a better idea of which priors to choose. 
+
+Most of the course we've been using normal distributions, and have done this with little specific justification. Our models have been something like
+
+$$
+y \sim \mathrm{Normal}(\mu,\sigma) \\
+\mu = a + b1 * x1 + b2 * x2 + ... \\
+$$
+with priors on the parameters.
+
+
+### Binomial
+Now we will be using likelihood functions that fit other data types and can be justified either from a maximum entropy position, or based on the process that produced the data. One common scenario that biologists deal with is one where the data are counts of how many individuals had a particular outcome, like survived or reproduced or developed a specific phenotype. We have a strong reason to beleive, a priori, that at least within a replicate batch of individuals, the outcome follows a binomial distribution. So our model might be something like:
+
+$$
+y \sim \mathrm{Binomial}(n,p) \\
+\mathrm{logit}(p) = a + b1 * x1 + b2 * x2 + ...\\
+$$
+with priors. Mathematically, this is a fine way of writing, but computationally it is really more like:
+$$
+y \sim \mathrm{Binomial}(n,p) \\
+p = \mathrm{logit}^{-1}(a + b1 * x1 + b2 * x2 + ... )\\
+$$
+
+Remember our island simulation? This is going to happen here, too, but now the simulation will be operating in the "space" of the parameters `a`, `b1`, `b2`, etc. We will have a current value of each of those parameters, propose new ones (based on Hamiltonian physics approximation), and then check the likelihood.
+
+And because of the way the link transformation works, the parameters are now on the $-\infty$ to $\infty$ scale so we can use normal distributions for priors. We can also add effects together without worrying about breaking the model by getting $p$ below 0 or above 1. 
+
+
+#### Example
+Still remember hydrochyloroquine? Here is the analysis we did, but logit style. 
+```{r}
+
+outcomes = tibble(treatment = c("HC","HC_AZ","None") , 
+                  death = c(27,25,18) , 
+                  discharge = c(70,88,140) , 
+                  HC_indicator = c(1,1,0),
+                  AZ_indicator = c(0,1,0)) %>%
+  mutate(total=death+discharge)
+
+
+
+m.HC.logit <- ulam(alist(
+  death ~ dbinom( total , mu ),
+  logit(mu) <-  a + HC_indicator * delHC + AZ_indicator * delAZ,
+  a ~ dnorm(0,1),
+  delHC ~ dnorm(0,0.1),
+  delAZ ~ dnorm(0,0.05)),
+  data=outcomes,
+  chains=4,cores=4,iter=2000
+)
+
+precis(m.HC.logit )
+
+```
+
+```{r}
+bayesplot::mcmc_areas(extract.samples(m.HC.logit)%>%
+                        as_tibble()%>%
+                        select(-a),
+                      prob=0.89)
+
+```
+
+
+These are already interpretable: $a$ is negative, which just means the probability of death is less than 1/2. Specifically, the inverse logit of -1.5 gives a death probability of ~0.2. The two del paramaters are not negative, suggesting that they don't decrease death rate.  
+
+We can get back to our natural scale, though, and see how things look there.
+```{r}
+post=extract(m.HC.logit@stanfit)%>%as_tibble()%>%
+  mutate(mu_none=inv_logit(a),
+         mu_HC=inv_logit(a+delHC),
+         mu_HC_AZ=inv_logit(a+delHC+delAZ),
+         prob=0.9)
+
+bayesplot::mcmc_areas(select(post,mu_none,mu_HC,mu_HC_AZ))
+
+
+```
+
+This is hiding some things because of covariance with the intercept. We can solve this again by looking at the "contrast" between treatments.
+
+```{r}
+post<-mutate(post,delHC=mu_HC-mu_none)
+
+mean(post$delHC)
+
+bayesplot::mcmc_areas(select(post,delHC),prob=0.9)
+
+```
+
+
+
+
+### Poisson
+
+Another common scenario is count data where the upper limit might be quite large. Number of offspring produced, for example. In this case, a fine a priori model is the Poisson distribution. Our model might be something like:
+
+$$
+y \sim \mathrm{Poisson}(\lambda) \\
+\mathrm{log}(\lambda) = a + b1 * x1 + b2 * x2 + ...\\
+$$
+with priors. Again we could put the inverse function on the other side and get
+$$
+y \sim \mathrm{Poisson}(\lambda) \\
+\lambda = \mathrm{log}^{-1}(a + b1 * x1 + b2 * x2 + ... )\\
+$$
+Of course, here the inverse of log is the exponential function. And again, the scale of our parameter has now been shifted onto $-\infty$ to $\infty$.
+
+
+LA covid cases, in the fall surge.
+```{r}
+load("LACases.rds")
+
+```
+
+Turns out `stan` can't handle column names with `.` in them. Do not ask how many minutes it took for me to remember this...
+```{r}
+LACases <- rename(LACases, newcases=new.cases)  
+```
+
+
+```{r}
+ ggplot(data=LACases,aes(x=day,y=newcases))+geom_point()
+
+```
+
+We can model this using a Poisson, since the number of people in LA is much much larger than the number infected per day. Our additive model portion will be to assume that day has an affect on the parameter (of course it isn't really day, it is number of infected people walking around, but the statistical association is still there).
+
+
+
+```{r}
+m.LACases.u <- ulam(
+  alist(
+    newcases ~ dpois(lambda) ,
+    log(lambda) <- a +  b  * day ,
+    a ~ dnorm(0,10) ,
+    b  ~ dnorm(0,2)
+  ) , data = LACases , cores=4, chains=4, iter=3000)
+ 
+precis(m.LACases.u) 
+
+
+```
+
+How did our model do in terms of capturing the pattern? 
+```{r}
+sim.LACases<-sim_df(m.LACases.u,data=LACases)
+
+summary.sim.LACases <- group_by(sim.LACases,day) %>%
+  summarise(mean.cases = mean(newcases),
+    lower.cases = quantile(newcases,0.1),
+    upper.cases = quantile(newcases,0.9)) %>%
+  ungroup()
+
+ggplot(summary.sim.LACases, aes(x=day,y=mean.cases))+
+  geom_point()+
+  geom_errorbar( aes(ymin=lower.cases,ymax=upper.cases))+
+  geom_point(data=LACases, aes(x=day,y=newcases), color="red")
+  
+```
+
+### Simulated Binomial regression
+
+```{r}
+sim_dat <- tibble(index=seq(1:100), x=rnorm(100,mean=0,sd=3))%>% 
+  mutate(obs=rpois(n=100,100),inv_x=inv_logit(x))%>%
+  mutate(y=rbinom(n=100,size=obs,prob=inv_x),frac=y/obs) 
+
+
+ggplot(sim_dat, aes(x=x,y=frac))+geom_point()
+```
+
+```{r}
+m.bin.reg <- quap(
+  alist(
+    y~dbinom(size=obs,prob=p),
+    logit(p) <- a+ b*x ,
+    a ~ dnorm(0,1),
+    b ~ dnorm(0,1)),
+  data=sim_dat)
+
+
+precis(m.bin.reg)
+```
+
+
