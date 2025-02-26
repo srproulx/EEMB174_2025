@@ -133,7 +133,7 @@ We can again compute the contrasts:
 ```{r}
 ## R code 11.30
 post <- extract.samples(m11.8) %>% as_tibble()%>%
-  mutate(diff_a=a[,2]-a[,1])
+  mutate(diff_a=a[,1]-a[,2])
 
 mcmc_intervals(select(post,diff_a),prob_outer = 0.9) 
 ```
@@ -207,15 +207,15 @@ Now make the graph of the contrasts on the probability scale. Because of the log
 
 ```{r}
 post.11.8 <- extract.samples(m11.8) %>% as_tibble()%>%
-  mutate(diff_a=a[,2]-a[,1],
+  mutate(diff_a=a[,1]-a[,2],
          a1=a[,1],
          a2=a[,2],
-         diff_p_1 = inv_logit(delta[,1]+a[,2])-inv_logit(delta[,1]+a[,1]),
-          diff_p_2 = inv_logit(delta[,2]+a[,2])-inv_logit(delta[,2]+a[,1]), 
-         diff_p_3 = inv_logit(delta[,3]+a[,2])-inv_logit(delta[,3]+a[,1]),
-          diff_p_4 = inv_logit(delta[,4]+a[,2])-inv_logit(delta[,4]+a[,1]),
-          diff_p_5 = inv_logit(delta[,5]+a[,2])-inv_logit(delta[,5]+a[,1]),
-          diff_p_6 = inv_logit(delta[,6]+a[,2])-inv_logit(delta[,6]+a[,1]))
+         diff_p_1 = inv_logit(delta[,1]+a[,1])-inv_logit(delta[,1]+a[,2]),
+          diff_p_2 = inv_logit(delta[,2]+a[,1])-inv_logit(delta[,2]+a[,2]), 
+         diff_p_3 = inv_logit(delta[,3]+a[,1])-inv_logit(delta[,3]+a[,2]),
+          diff_p_4 = inv_logit(delta[,4]+a[,1])-inv_logit(delta[,4]+a[,2]),
+          diff_p_5 = inv_logit(delta[,5]+a[,1])-inv_logit(delta[,5]+a[,2]),
+          diff_p_6 = inv_logit(delta[,6]+a[,1])-inv_logit(delta[,6]+a[,2]))
 
 
 mcmc_intervals(select(post.11.8,diff_p_1,diff_p_2,diff_p_3,diff_p_4,diff_p_5,diff_p_6),prob_outer = 0.9) 
