@@ -1,0 +1,230 @@
+---
+title: "Binomial Regression"
+author: "Stephen R. Proulx"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(rethinking)
+library(bayesplot)
+source("../helper.R")
+```
+
+
+# Today's objectives:  
+* Learn about ways to use index and indicator variables to build models
+* binomial regression
+* Calculating contrasts from posterior parameter distributions
+* Specifying models with contrasts built in. 
+
+
+## The logistic function
+
+The logit transformation maps numbers between 0 and 1 to numbers between -inf and inf. We will talk about mapping from the probabiliy scale to the logit scale, and vice-versa.
+```{r}
+logit_dat <- tibble( x= seq(from=0,to=1,by=0.001)) %>%
+  mutate(y=logit(x))
+
+ggplot(logit_dat, aes(x=x,y=y))+geom_line()
+```
+
+
+The inverse logit transformation maps numbers between between -inf and inf to numbers between 0 and 1. In our additive models we will be combining effects, how do these translate back to the probability scale?
+```{r}
+inv_logit_dat <- tibble( x= seq(from=-10,to=10,by=0.1)) %>%
+  mutate(y=inv_logit(x) , y_add=inv_logit(x+0.5) , y_diff=y_add-y)
+
+ggplot(inv_logit_dat, aes(x=x,y=y))+
+  geom_line(color="black")+
+  geom_line(aes(x=x,y=y_add) , color="red")
+
+ggplot(inv_logit_dat, aes(x=x,y=y_diff))+
+  geom_line(color="black")
+
+```
+
+The effect of our additive model on the probability scale is always dependent on both values that we are combining. This is why McElreath talks about interactions arising even when you don't build them in.   
+
+
+## Binomial admissions
+
+```{r}
+## R code 11.28
+library(rethinking)
+data(UCBadmit)
+d <- UCBadmit %>% 
+  as_tibble() %>%
+  mutate(gid= (applicant.gender=="male")*1+(applicant.gender=="female")*2,
+         dept_id=as.integer( as.factor(dept)))
+```
+
+
+### A model with gender id only
+Write out a model where the gender determines admission rate, but not the department
+```{r}
+## R code 11.29ish
+m11.7 <- ulam(
+    alist(
+      
+    ) , data=select(d,admit,applications,gid) , chains=4, iter=3000 )
+precis( m11.7 , depth=2 )
+```
+
+
+We get the list of samples from the posterior as a tibble named "post"
+```{r}
+## R code 11.30
+post <- extract.samples(m11.7) %>% as_tibble()
+```
+
+
+Now calculate the contrast for admission by gender id. This means that we want the difference in a for each row in the posterior data table. Use mutate to get this difference. We also will want this difference on the probability scale. Again use mutate, but use the 'inv_logit' function to convert back to the probability scale. 
+
+```{r}
+
+```
+
+
+Plot the contrasts, you can use 'mcmc_intervals' or 'mcmc_areas' to visual the probable intervals. Use prob_outer to determine what range of probable values to include. 
+
+
+### Posterior plots
+Now that we have our model fit, we will use some built-in function of Rethinkng to visualize what the model says about how the data come about: Use the postcheck function and then add in the lines to connect departments. 
+
+```{r}
+## R code 11.31
+postcheck( m11.7 )
+# draw lines connecting points from same dept
+for ( i in 1:6 ) {
+    x <- 1 + 2*(i-1)
+    y1 <- d$admit[x]/d$applications[x]
+    y2 <- d$admit[x+1]/d$applications[x+1]
+    lines( c(x,x+1) , c(y1,y2) , col=rangi2 , lwd=2 )
+    text( x+0.5 , (y1+y2)/2 + 0.05 , d$dept[x] , cex=0.8 , col=rangi2 )
+}
+```
+
+### Gender ID and Department
+A model that includes both an effect of gender, and an effect of department. Some departments are harder to get into than others, and some departments have more people admitted than others. 
+
+We want a linear model that adds together the gender effect and the department effect. We can conceptualize this as department modifing the gender effect, or gender modifying department effect, but either way the model is really the same.
+```{r}
+## R code 11.32
+
+m11.8 <- ulam(
+    alist(
+
+          ) , data=select(d,admit,applications,gid,dept_id) , cores=4, chains=4 , iter=4000, log_lik = TRUE)
+precis( m11.8 , depth=2 )
+```
+
+Now compute the contrasts in both logit scale and probability scale for the gender id effect:
+```{r}
+
+```
+
+
+We can again use the postcheck function to see what the model says about the data:
+```{r}
+## R code 11.31
+postcheck( m11.8 )
+# draw lines connecting points from same dept
+for ( i in 1:6 ) {
+    x <- 1 + 2*(i-1)
+    y1 <- d$admit[x]/d$applications[x]
+    y2 <- d$admit[x+1]/d$applications[x+1]
+    lines( c(x,x+1) , c(y1,y2) , col=rangi2 , lwd=2 )
+    text( x+0.5 , (y1+y2)/2 + 0.05 , d$dept[x] , cex=0.8 , col=rangi2 )
+}
+```
+
+
+
+
+### Alternative formulations of the same model.
+
+The alternate model where we force the `a` values to be a difference from an "intercept". In this version, `delta` acts as the intercept for each department, and a is the increase in admission rate (on the logit scale) for women.  
+```{r}
+m11.8A <- ulam(
+    alist(
+        admit ~ dbinom( applications , p ) ,
+        logit(p) <- a*(gid-1)  + delta[dept_id] ,
+        a ~ dnorm( 0 , 1.5 ) ,
+        delta[dept_id] ~ dnorm( 0 , 1.5 )
+    ) , data=select(d,admit,applications,gid,dept_id) , cores=4, chains=4 , iter=4000,log_lik = TRUE) 
+```
+
+Compare the intervals and standard deviations of the parameters in the two models, what do you notice?
+```{r}
+precis(m11.8, depth=2)
+precis(m11.8A, depth=2)
+```
+
+Now compare the WAIC of the two models.
+```{r}
+compare(m11.8,m11.8A)
+```
+
+These models come up with the same actual predictions for admission probability, they just add together different quantities to get there. Compare this graph to the one we got with model 11.8:
+```{r}
+postcheck( m11.8A )
+# draw lines connecting points from same dept
+for ( i in 1:6 ) {
+    x <- 1 + 2*(i-1)
+    y1 <- d$admit[x]/d$applications[x]
+    y2 <- d$admit[x+1]/d$applications[x+1]
+    lines( c(x,x+1) , c(y1,y2) , col=rangi2 , lwd=2 )
+    text( x+0.5 , (y1+y2)/2 + 0.05 , d$dept[x] , cex=0.8 , col=rangi2 )
+}
+```
+
+What happens if you tighten the prior on a[gid] in model 11.8? Try it and see how it differs from the version we have already run. Try it and see:
+
+
+
+
+
+
+
+### Contrasts for model 11.8
+
+How should we evaluate the results from model 11.8? We need the contrast in a[1] and a[2]. Looking at the overlap of a[1] and a[2] is not enough;
+```{r}
+post.11.8 <- extract.samples(m11.8) %>% as_tibble()%>%
+  mutate(diff_a=a[,2]-a[,1],
+         a1=a[,1],
+         a2=a[,2])
+mcmc_intervals(select(post.11.8,a1,a2)) 
+
+mcmc_intervals(select(post.11.8,diff_a)) +
+  xlim(c(-0.1,0.3))
+
+post.11.8A <- extract.samples(m11.8A) %>% as_tibble() %>%
+   mutate(diff_a=a)
+mcmc_intervals(select(post.11.8A,diff_a))  +
+  xlim(c(-0.1,0.3))
+```
+
+Now make the graph of the contrasts on the probability scale. Because of the logit link you will have to do it for specific departments.
+```{r}
+post.11.8 <- extract.samples(m11.8) %>% as_tibble()%>%
+  mutate(diff_a=a[,2]-a[,1],
+         a1=a[,1],
+         a2=a[,2],
+         diff_p_1 = inv_logit(delta[,1]+a[,2])-inv_logit(delta[,1]+a[,1]),
+          diff_p_2 = inv_logit(delta[,2]+a[,2])-inv_logit(delta[,2]+a[,1]), 
+         diff_p_3 = inv_logit(delta[,3]+a[,2])-inv_logit(delta[,3]+a[,1]),
+          diff_p_4 = inv_logit(delta[,4]+a[,2])-inv_logit(delta[,4]+a[,1]),
+          diff_p_5 = inv_logit(delta[,5]+a[,2])-inv_logit(delta[,5]+a[,1]),
+          diff_p_6 = inv_logit(delta[,6]+a[,2])-inv_logit(delta[,6]+a[,1]))
+
+
+mcmc_intervals(select(post.11.8,diff_p_1,diff_p_2,diff_p_3,diff_p_4,diff_p_5,diff_p_6),prob_outer = 0.9) 
+```
+
+
+
+
