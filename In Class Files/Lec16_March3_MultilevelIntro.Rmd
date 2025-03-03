@@ -1,0 +1,256 @@
+---
+title: "Multilevel I"
+author: "Stephen R. Proulx"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(rethinking)
+source("../helper.R")
+```
+
+# Today's objectives:  
+* See how to write models with multiple layers of parameter distributions. 
+* Observe the way that multilevel models can improve model fit without creating over-fitting
+
+# Reedfrog dataset
+This data is from a study that looked at how tadpole density and size affected their predation rate. Those that survived did so because they didn't die naturally and also did not get eaten. 
+
+
+Load the data and have a general look.
+
+```{r}
+data(reedfrogs)
+d <- as_tibble(reedfrogs)%>%
+  rowid_to_column("tank") %>%
+  mutate(P=(pred=="pred")*1+0)%>%
+  view()
+```
+
+Let's see how it looks, we'll add some features to the plot so we can visualize the effects.
+```{r}
+ggplot(d, aes(x=tank, y= propsurv)) +geom_point( aes(color=pred,shape=as.factor(density)))
+```
+
+
+
+
+## Tank effects model with no predictors
+
+Here we have a model you should be fairly used to, individual effects for each tank with a common prior for all tanks.
+```{r}
+m13.1 <- ulam(
+  alist(
+    surv ~ dbinom( density, p),
+    logit(p) <- a[tank],
+    a[tank] ~ dnorm(0,1.5)
+  ),
+  data=select(d,surv,density,tank), chains=4, log_lik = TRUE
+  )
+```
+
+Inspect the summary, there are 48 parameters, and they all have good convergence stats. 
+```{r}
+precis(m13.1 , depth =2)
+```
+
+Compute the WAIC. The effective number of parameters is lower than the true number, but it is more important to know how the number of parameters compares between models. 
+```{r}
+WAIC(m13.1)
+```
+
+
+### Same system, but multi-level tank effects
+
+Here we model the tank-specific means as coming from a distribution themselves. We will end up with a parameter for each tank, and this parameter will have a mean and a distribution. But we also will have the more general parameters which describe where tank parameters themselves come from. This is great, we can now make predictions about tanks we have not yet seen without resorting to over-fitting. 
+```{r}
+m13.2 <- ulam(
+  alist(
+    surv ~ dbinom( density, p),
+    logit(p) <- a[tank],
+    a[tank] ~ dnorm(abar,sigma),
+    abar ~ dnorm(0,1.5),
+    sigma ~ dexp(1)
+  ),
+  data=select(d,surv,density,tank), chains=4, iter=10000, log_lik = TRUE
+  )
+```
+```{r}
+precis(m13.2,depth=2)
+
+```
+
+
+
+We can also include sigma as a multiplier of the parameter values, rather than including it in the prior distribution itself. This is the exact same mathematical model, but it performs better computationally.
+```{r}
+m13.2.s <- ulam(
+  alist(
+    surv ~ dbinom( density, p),
+    logit(p) <- abar+a[tank]*sigma,
+    a[tank] ~ dnorm(0,1),
+    abar ~ dnorm(0,1.5),
+    sigma ~ dexp(1)
+  ),
+  data=select(d,surv,density,tank), chains=4,iter=10000, log_lik = TRUE
+  )
+```
+
+This model now has 50 parameters, a few more than the last. 
+```{r}
+precis(m13.2,depth=1)
+
+precis(m13.2.s,depth=1)
+```
+We compute WAIC and see that the effective number of parameters has actually gone down!
+```{r}
+WAIC(m13.2)
+```
+
+And we can compare them. The multilevel model here does better, and does more-better than the SE of the WAIC scores, so we can be confident that it improves fit to the data without overfitting. And as we've already noted it does this by having fewer effective parameters. 
+```{r}
+compare(m13.1,m13.2 )
+```
+
+### What is the multilevel model predicting?
+
+The multilevel model fits the data by estimating a sort of hidden parameter for each tank, but it also estimates the distribution that generates these tank-level parameters. How do these work together?
+
+This is the simulation if we use the inferred tank-specific values.
+```{r}
+sim.13.2 <- sim_df(m13.2, data=d)
+
+
+sim.13.2.sum<- sim.13.2 %>%
+  group_by(tank)%>%
+  summarise(
+    sbar=mean(surv/density),
+    slow=quantile(surv/density,0.05),
+    shigh=quantile(surv/density,0.95),
+    nbar=mean(density),
+    pred=mean(P)) %>%
+  ungroup()
+
+
+ggplot(sim.13.2.sum, aes(x=tank, y=sbar)) +
+  geom_errorbar(aes(ymin=slow,ymax=shigh))+
+  geom_point(data=d , aes(x=tank,y=surv/density,color=pred))
+
+
+```
+
+Now lets see what we get when we apply the generative model for the tanks without using the estimated tank-specific parameters. 
+
+Warning: this code is clunky and roundabout. 
+```{r}
+post13.2 <- extract.samples( m13.2 ) %>% as_tibble() %>%
+  select(abar,sigma)
+
+#use the first 1000 samples
+ran_eff_sim_out <- tibble(tank=rep(seq(1:48),1000),pindex=rep(1:1000, each=48),n=NA,S=NA,abar=NA,sigma=NA,ptank=NA)
+
+for(i in 1:(length(ran_eff_sim_out$tank))){
+  ran_eff_sim_out$n[i]=sim.13.2.sum$nbar[ran_eff_sim_out$tank[i]]
+  ran_eff_sim_out$abar[i]=post13.2$abar[ran_eff_sim_out$pindex[i]]
+  ran_eff_sim_out$sigma[i]=post13.2$sigma[ran_eff_sim_out$pindex[i]]
+}
+
+ran_eff_sim_out<- ran_eff_sim_out %>%
+  mutate(ptank=inv_logit(rnorm(n(),mean = abar,sd=sigma)),
+         S=rbinom(n(),prob =  ptank,size=n))%>%
+  left_join(select(sim.13.2.sum,tank,pred))
+
+
+ran_eff_sim_out_sum<-ran_eff_sim_out %>%
+  group_by(tank) %>%
+  summarise(meann=mean(n),
+            meansurv=mean(S/n),
+            lowsurv=quantile(S/n,0.05),
+            highsurv=quantile(S/n,0.95))%>%
+  ungroup() 
+```
+
+Here are what we got for the first 3 parameter sets from the posterior samples  
+```{r}
+ggplot(filter(ran_eff_sim_out,pindex==1) , aes(x=tank,y=S/n))+geom_point(aes(shape=as.factor(pred),color=as.factor(pred)))
+
+ggplot(filter(ran_eff_sim_out,pindex==2) , aes(x=tank,y=S/n))+geom_point(aes(shape=as.factor(pred),color=as.factor(pred)))
+
+ggplot(filter(ran_eff_sim_out,pindex==3) , aes(x=tank,y=S/n))+geom_point(aes(shape=as.factor(pred),color=as.factor(pred)))
+```
+
+```{r}
+ggplot(ran_eff_sim_out_sum,aes(x=tank,y=meansurv))+
+  geom_ribbon(aes(ymin=lowsurv,ymax=highsurv),fill="red",alpha=0.35)+
+  geom_point(data=d , aes(x=tank,y=surv/density))+
+  lims(x=c(0,50),y=c(0,1))
+
+```
+
+ADD IN A COMPARISON TO THE FULL POOLING PREDICTIONS
+
+
+### Converting to the model with no variance between tanks
+Here's the model where all tanks have the same `a`
+```{r}
+m13.2.single.a <- ulam(
+  alist(
+    surv ~ dbinom( density, p),
+    logit(p) <- abar ,
+    abar ~ dnorm(0,3) 
+  ),
+  data=select(d,surv,density,tank), cores=4, chains=4 ,iter=6000, log_lik = TRUE
+  )
+```
+
+```{r}
+WAIC(m13.2.single.a)
+```
+
+Two ways to reduce this model to one with a fixed `a` value for all tanks. Either set the variance to close to 0 manually, or choose a prior for the variance that is concentrated around 0. In either case the WAIC goes way up because it isn't fitting the data well and the penalty for parameters is lower than before.
+```{r}
+m13.2.small.sigma1 <- ulam(
+  alist(
+    surv ~ dbinom( density, p),
+    logit(p) <- abar+a[tank]*0.01 ,# I just typed 0.01 instead of sigma
+    a[tank] ~ dnorm(0,1), 
+    abar ~ dnorm(0,1.5) 
+  ),
+  data=select(d,surv,density,tank), cores=4, chains=4 ,iter=3000, log_lik = TRUE
+  )
+```
+for comparison, the same model but specified differently. It runs much less efficiently.
+```{r}
+m13.2.small.sigma2 <- ulam(
+  alist(
+    surv ~ dbinom( density, p),
+    logit(p) <- a[tank] ,
+    a[tank] ~ dnorm(abar,0.01), # I just typed 0.01 instead of sigma
+    abar ~ dnorm(0,1.5) 
+  ),
+  data=select(d,surv,density,tank), cores=4, chains=4 ,iter=3000, log_lik = TRUE
+  )
+```
+
+```{r}
+WAIC(m13.2.small.sigma1)
+```
+
+
+
+
+
+
+How do they compare? They basically come out the same, because they are more or less doing the same thing. The raw lppd scores are quite similar, and the WAIC are not more different thamn the SE of WAIC.
+```{r}
+compare(m13.2.single.a,m13.2.small.sigma1)
+```
+```{r}
+precis(m13.2.single.a)
+precis(m13.2.small.sigma1)
+precis(m13.2.small.sigma2)
+```
+
