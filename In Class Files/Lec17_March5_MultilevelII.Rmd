@@ -1,0 +1,432 @@
+---
+title: "Multilevel II"
+author: "Stephen R. Proulx"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(rethinking)
+source("../helper.R")
+```
+
+# Today's objectives:  
+* Simulate data to observe shrinkage (aka partial pooling)
+* Apply a partial pooling model to data with a predictor
+
+
+## Simulating to show an advantage of partial pooling
+
+Define the parameters to use in this simulation
+```{r}
+## R code 13.7
+a_bar <- 1.5
+sigma <- 1.5
+nponds <- 60
+```
+```{r}
+inv_logit(1.5)
+```
+
+
+
+Simulate the data
+```{r}
+set.seed(5005)
+sim_data <- tibble(Ni = rep(c(5,10,25,35),each=15),
+                   a_pond = rnorm( nponds , mean=a_bar , sd=sigma )) %>%
+  mutate(
+    p_true = inv_logit(a_pond),
+    Si = rbinom(n(),prob=inv_logit(a_pond),size=Ni)) %>%
+  rowid_to_column("pond")
+
+
+```
+
+Calulate the full-pooling and no pooling maximum likelihood estimates (i.e. maximum posterior values with a flat prior). These are just the global average survival (full-pooling) and the survival within each pond (no-pooling).
+```{r}
+sim_data <- mutate(sim_data,
+                   p_nopool=Si/Ni,
+                   p_fullpool=sum(Si)/sum(Ni) )
+```
+
+
+Run the mutli-level model.
+```{r}
+## R code 13.13
+dat <- select( sim_data, pond, Ni, Si )
+m13.3 <- ulam(
+    alist(
+        Si ~ dbinom( Ni , p ),
+        logit(p) <- a_pond[pond],
+        a_pond[pond] ~ dnorm( a_bar , sigma ),
+        a_bar ~ dnorm( 0 , 1.5 ),
+        sigma ~ dexp( 1 )
+    ), data=dat , chains=4 ,cores=4)
+```
+
+```{r}
+## R code 13.14
+precis( m13.3 , depth=2 )
+
+```
+
+Extract the samples from the model, convert them to the probability scale, and calculate the error from true
+
+```{r}
+## R code 13.15
+post <- extract.samples( m13.3 ) %>% as_tibble()
+
+
+# get the a_pond portion of the posterior and summarize
+post_a_pond <- select(post,a_pond)%>%
+  as.matrix()%>%  as_tibble() %>%
+  gather( "ponds","a_pond",1:nponds)%>%
+  separate(ponds,c("name","pond"),sep=7) %>%
+  mutate(pond=as.numeric(pond),
+         p_pond = inv_logit(a_pond)) %>%
+  select(-name)
+
+post_a_pond_summarized <- group_by(post_a_pond,pond) %>%
+  summarise(
+    p_partpool = mean(p_pond),
+  )%>%
+  ungroup()
+
+
+
+# get the a_bar portion of the posterior and summarize
+post_a_bar <- select(post,a_bar) 
+
+post_a_bar_summarized <- summarise(post_a_bar,
+    a_bar = mean(a_bar))
+
+
+# put them all in one dataframe
+sim_data <- left_join(sim_data,post_a_pond_summarized) %>%
+  mutate(partpool_a_bar = post_a_bar_summarized$a_bar[1],
+         nopool_p_bar = sum(p_nopool)/nponds,
+         nopool_a_bar = logit(nopool_p_bar),
+         true_a_bar = sum(a_pond)/nponds
+         ) %>%
+  select(-nopool_p_bar)
+
+```
+
+Take a minute to look at the error.
+```{r}
+view(sim_data)
+```
+
+
+compute the error measurement and plot. no pool model fit is in blue.
+```{r}
+## R code 13.17
+sim_data <- sim_data %>%
+  mutate(nopool_error = abs(p_nopool-p_true), partpool_error = abs(p_partpool-p_true))
+
+
+dfline <- 
+  sim_data %>%
+  select(Ni, nopool_error:partpool_error) %>%
+  gather(key, value, -Ni) %>%
+  group_by(key, Ni) %>%
+  summarise(mean_error = mean(value)) %>%
+  mutate(x    = c( 1, 16, 31, 46),
+         xend = c(15, 30, 45, 60))
+
+
+ ggplot(sim_data,aes(x = pond)) +
+  geom_vline(xintercept = c(15.5, 30.5, 45.4), 
+             color = "white", size = 2/3) +
+  geom_point(aes(y = nopool_error), color = "blue") +
+  geom_point(aes(y = partpool_error), shape = 1) +
+  geom_segment(data = dfline, 
+               aes(x = x, xend = xend, 
+                   y = mean_error, yend = mean_error),
+               color = rep(c("blue", "black"), each = 4),
+               linetype = rep(1:2, each = 4)) +
+  scale_x_continuous(breaks = c(1, 10, 20, 30, 40, 50, 60)) +
+  annotate("text", x = c(15 - 7.5, 30 - 7.5, 45 - 7.5, 60 - 7.5), y = .45, 
+           label = c("tiny (5)", "small (10)", "medium (25)", "large (35)")) +
+  labs(y        = "absolute error",
+       x = "pond number")+
+  theme(panel.grid    = element_blank(),
+        plot.subtitle = element_text(size = 10))
+```
+
+
+
+
+We can also look for error of the estimate of the abar by comparing the partial pooling and pooling approaches
+
+Run the full pooling model:
+```{r}
+## R code 13.13
+dat <- select( sim_data, pond, Ni, Si )
+m13.3FullPool <- ulam(
+    alist(
+        Si ~ dbinom( Ni , p ),
+        logit(p) <- a_pool,
+        a_pool ~ dnorm( 0 , 1.5 )
+    ), data=dat , chains=4 ,cores=4)
+```
+
+```{r}
+ 
+post_a_bar <- extract.samples(m13.3) %>% as.data.frame()%>%as_tibble()%>%select(a_bar)%>%
+  mutate(p_error = abs(inv_logit(a_bar)-inv_logit(.env$a_bar) )  )
+
+post_a_pool <- extract.samples(m13.3FullPool) %>% as.data.frame()%>%as_tibble()%>%select(a_pool)%>%
+  mutate(pool_error = abs(inv_logit(a_pool)-inv_logit(.env$a_bar) )  ) 
+
+post_p_comb = bind_cols(post_a_bar,post_a_pool)
+
+precis(post_p_comb)
+
+ggplot(data=post_p_comb , aes(x=p_error))+
+  geom_histogram(fill="red",alpha=0.5)+
+  geom_histogram(aes(x=pool_error), fill="green",alpha=0.5)
+
+
+```
+
+### re-simulate and look again
+```{r}
+sim_data <- tibble(Ni = rep(c(5,10,25,35),each=15),
+                   a_pond = rnorm( nponds , mean=a_bar , sd=sigma )) %>%
+  mutate(
+    p_true = inv_logit(a_pond),
+    Si = rbinom(n(),prob=inv_logit(a_pond),size=Ni)) %>%
+  rowid_to_column("pond")
+
+
+sim_data <- mutate(sim_data,
+                   p_nopool=Si/Ni,
+                   p_fullpool=sum(Si)/sum(Ni) )
+
+
+dat <- select( sim_data, pond, Ni, Si )
+m13.3new <- ulam(
+    alist(
+        Si ~ dbinom( Ni , p ),
+        logit(p) <- a_pond[pond],
+        a_pond[pond] ~ dnorm( a_bar , sigma ),
+        a_bar ~ dnorm( 0 , 1.5 ),
+        sigma ~ dexp( 1 )
+    ), data=dat , chains=4 ,cores=4)
+```
+```{r}
+precis(m13.3new,depth=2)
+```
+
+
+```{r}
+## R code 13.15
+post <- extract.samples( m13.3new )%>% as_tibble()
+
+
+# get the a_pond portion of the posterior and summarize
+post_a_pond <- select(post,a_pond)%>%
+  as.matrix()%>%  as_tibble() %>%
+  gather( "ponds","a_pond",1:nponds)%>%
+  separate(ponds,c("name","pond"),sep=7) %>%
+  mutate(pond=as.numeric(pond),
+         p_pond = inv_logit(a_pond)) %>%
+  select(-name)
+
+post_a_pond_summarized <- group_by(post_a_pond,pond) %>%
+  summarise(
+    p_partpool = mean(p_pond),
+  )%>%
+  ungroup()
+
+
+
+# get the a_bar portion of the posterior and summarize
+post_a_bar <- select(post,a_bar) 
+
+post_a_bar_summarized <- summarise(post_a_bar,
+    a_bar = mean(a_bar))
+
+
+# put them all in one dataframe
+sim_data <- left_join(sim_data,post_a_pond_summarized) %>%
+  mutate(partpool_a_bar = post_a_bar_summarized$a_bar[1],
+         nopool_p_bar = sum(p_nopool)/nponds,
+         nopool_a_bar = logit(nopool_p_bar),
+         true_a_bar = sum(a_pond)/nponds
+         ) %>%
+  select(-nopool_p_bar)
+
+
+
+## R code 13.17
+sim_data <- sim_data %>%
+  mutate(nopool_error = abs(p_nopool-p_true), partpool_error = abs(p_partpool-p_true))
+
+
+dfline <- 
+  sim_data %>%
+  select(Ni, nopool_error:partpool_error) %>%
+  gather(key, value, -Ni) %>%
+  group_by(key, Ni) %>%
+  summarise(mean_error = mean(value)) %>%
+  mutate(x    = c( 1, 16, 31, 46),
+         xend = c(15, 30, 45, 60))
+
+
+ ggplot(sim_data,aes(x = pond)) +
+  geom_vline(xintercept = c(15.5, 30.5, 45.4), 
+             color = "white", size = 2/3) +
+  geom_point(aes(y = nopool_error), color = "blue") +
+  geom_point(aes(y = partpool_error), shape = 1) +
+  geom_segment(data = dfline, 
+               aes(x = x, xend = xend, 
+                   y = mean_error, yend = mean_error),
+               color = rep(c("blue", "black"), each = 4),
+               linetype = rep(1:2, each = 4)) +
+  scale_x_continuous(breaks = c(1, 10, 20, 30, 40, 50, 60)) +
+  annotate("text", x = c(15 - 7.5, 30 - 7.5, 45 - 7.5, 60 - 7.5), y = .45, 
+           label = c("tiny (5)", "small (10)", "medium (25)", "large (35)")) +
+  labs(y        = "absolute error",
+       x = "pond number")+
+  theme(panel.grid    = element_blank(),
+        plot.subtitle = element_text(size = 10))
+```
+
+`
+```{r}
+view(sim_data)
+```
+
+
+## Partial pooling with categories 
+
+
+Now we will do a simulation with two "treatments". The first set of data points have a mean parameter of `a_bar1` and the second set have a parameter of `a_bar2`. We make two data frames and then put them together. 
+
+These have a fairly different mean value of `a_bar`.
+```{r}
+a_bar1 <- 1.5
+a_bar2 <-0
+sigma <- 0.5
+nponds <- 50
+
+set.seed(5005)
+
+sim_data1 <- tibble(treatment = 1,Ni = rep(c(50),each=50),
+                   a_pond = rnorm( nponds , mean=a_bar1 , sd=sigma )) %>%
+  mutate(
+    Si = rbinom(n(),prob=inv_logit(a_pond),size=Ni))
+
+sim_data2 <- tibble(treatment = 2,Ni = rep(c(50),each=50),
+                   a_pond = rnorm( nponds , mean=a_bar2 , sd=sigma )) %>%
+  mutate(
+    Si = rbinom(n(),prob=inv_logit(a_pond),size=Ni))
+
+
+
+sim_data_tot=bind_rows(sim_data1,sim_data2) %>% 
+  rowid_to_column("pond")
+```
+
+
+Run the mutlilevel model. We specify a_pond[pond] as before, but now the distribution that it is drawn from has an a_bar that depends on treatment.
+```{r}
+dat=select(sim_data_tot,-a_pond)
+
+m13.3Abig <- ulam(
+    alist(
+        Si ~ dbinom( Ni , p ),
+        logit(p) <- a_pond[pond],
+        a_pond[pond] ~ dnorm( a_bar[treatment] , sigma ),
+        a_bar[treatment] ~ dnorm( 0 , 1.5 ),
+        sigma ~ dexp( 1 )
+    ), data=select(sim_data_tot,-a_pond) , chains=4 , cores=4 ,iter=5000)
+```
+
+The precis includes the values for each pond, but go to the end and look at the treatment specific values.
+```{r}
+precis(m13.3Abig, depth = 2)
+
+```
+
+
+To see what the effect of treatment is, we need to calculate the contrast for each sample and average over all samples.
+```{r}
+post <- extract.samples( m13.3Abig ) %>% as_tibble() %>%
+  select(a_bar)
+
+
+contrast<- mutate(post,delta_a=a_bar[,2]-a_bar[,1])
+
+
+quantile(contrast$delta_a,c(0.05,.5,.95))
+```
+
+
+
+
+
+Alternative version of the model, taking advantage of the additive way that nested normal distributions can be simplified.
+```{r}
+dat=select(sim_data_tot,-a_pond)
+
+m13.3AbigA <- ulam(
+    alist(
+        Si ~ dbinom( Ni , p ),
+        logit(p) <- a_bar[treatment] +a_pond[pond],
+        a_pond[pond] ~ dnorm( 0 , sigma ),
+        a_bar[treatment] ~ dnorm( 0 , 1.5 ),
+        sigma ~ dexp( 1 )
+    ), data=select(sim_data_tot,-a_pond) , chains=4 ,cores=4, iter=5000)
+```
+
+
+
+
+```{r}
+precis(m13.3AbigA, depth = 2)
+
+```
+
+```{r}
+post <- extract.samples( m13.3AbigA ) %>% as_tibble() %>%
+  select(a_bar)
+
+
+contrast<- mutate(post,delta_a=a_bar[,2]-a_bar[,1])
+
+
+quantile(contrast$delta_a,c(0.05,.5,.95))
+```
+
+## Multilevel normal distribution models
+
+```{r}
+mu_low=10;
+mu_high=20;
+sigma_noise=1;
+sigma_obs=3;
+
+
+
+group_effect=tibble(replicate=seq(1:10),delta_rep = rnorm(10,mean=0,sd=sigma_noise))
+
+mystery_data <- tibble(index=seq(1:100),replicate=rep(1:10,10),treat=rep(rep(1:2,10),5))%>%
+  mutate(mu_treat = (treat==1)*mu_low+(treat==2)*mu_high,
+         delta_obs=rnorm(n(),mean=0,sd=sigma_obs)) %>%
+  left_join(group_effect)%>%
+  mutate(y=mu_treat+delta_obs+delta_rep)
+```
+
+
+```{r}
+ggplot(mystery_data,aes(x=replicate,y=y,group=replicate))+geom_boxplot()
+```
+
+
+Write out a multilevel model for these data:
