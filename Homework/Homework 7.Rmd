@@ -1,0 +1,29 @@
+---
+title: "Homework 7"
+author: "EEMB 174-274"
+output: pdf_document
+header-includes:
+  - \usepackage{color}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(rethinking)
+#source("../Resources/helper.R")
+```
+# Bayesian Statistical Modeling Winter 2025
+# Homework, Week 9
+
+*When is homework due?* This assignment is due on Wednesday, 3/12/2025. 
+
+Complete these problems from the end of chapter 
+
+## 13E2
+
+## 13E3
+
+## 13E4
+
+
+

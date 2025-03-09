@@ -83,7 +83,9 @@ precis(m13.2,depth=2)
 
 ```
 
-
+```{r}
+WAIC(m13.2)
+```
 
 We can also include sigma as a multiplier of the parameter values, rather than including it in the prior distribution itself. This is the exact same mathematical model, but it performs better computationally.
 ```{r}
@@ -244,7 +246,7 @@ WAIC(m13.2.small.sigma1)
 
 
 
-How do they compare? They basically come out the same, because they are more or less doing the same thing. The raw lppd scores are quite similar, and the WAIC are not more different thamn the SE of WAIC.
+How do they compare? They basically come out the same, because they are more or less doing the same thing. The raw lppd scores are quite similar, and the WAIC are not more different than the SE of WAIC.
 ```{r}
 compare(m13.2.single.a,m13.2.small.sigma1)
 ```
