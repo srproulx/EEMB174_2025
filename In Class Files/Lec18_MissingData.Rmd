@@ -1,0 +1,504 @@
+---
+title: "Missing Data and Such"
+author: "Stephen R. Proulx"
+date: "2024-03-04"
+output: pdf_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(rethinking)
+source("../helper.R")
+```
+
+# Today's objectives:  
+* See how we can model missing/hidden states
+* Revisit the two-leg inferring height problem, but now assume each leg is measured with error from an unknown true leg length
+* See how population size can be inferred from mark-recapture data
+* Use mark-recapture data to measure the effect of a trait on survival/fitness
+
+
+
+# The two-legs simulations: Inferring true leg length
+
+## simulation the data
+
+```{r}
+n <- 100
+set.seed(5)
+
+d <- 
+  tibble(index = seq(1:n) , height    = rnorm(n, mean = 10, sd = 2),
+         leg_prop  = runif(n, min = 0.4, max = 0.5)) %>% 
+  mutate(leg_left  = leg_prop * height + rnorm(n, mean = 0, sd = 0.2),
+         leg_right = leg_prop * height + rnorm(n, mean = 0, sd = 0.2))
+```
+
+
+
+```{r}
+ggplot(filter(d,index<10), aes(x=leg_prop,y=height))+
+  geom_point(color="red")+
+  geom_point( color="blue" ,aes(x=leg_prop,y=leg_left))+
+  geom_point( color="green" ,aes(x=leg_prop,y=leg_right))+
+  ylim(2,20)+
+  ylab("Height")+
+  xlab("true leg proportion of height'")
+```
+
+What is our model?
+We model a linear relationship between breeding value of leg length and height
+$$
+H_i \sim \mathrm{Normal}(\mu_i, \sigma)\\
+\mu_i   = bL*LA_i  \\
+Ll_i  \sim \mathrm{Normal}(LA_i, \sigma_L)\\
+Lr_i \sim \mathrm{Normal}(LA_i, \sigma_L)\\
+LA \sim Normal(\mu_L , \sigma_L) \\ 
+bL \sim \mathrm{Normal}(2,2)\\
+\mu_L \sim Normal(5,5)\\
+\sigma \sim \mathrm{Exponential}(1) \\
+\sigma_L \sim \mathrm{Exponential}(1) 
+$$ 
+
+
+
+
+
+
+```{r}
+d_2 <- rename(d,ind=index)
+m.inferred.legs <- 
+  ulam( alist(
+    height ~ dnorm(mu,sigma),
+    mu <- bL * LA[ind] ,
+    leg_left[ind] ~ dnorm(LA[ind],sigma_Le),
+    leg_right[ind] ~ dnorm(LA[ind],sigma_Le),
+    LA[ind] ~ dnorm(mu_leg,sigma_leg),
+    bL ~ dnorm(2,2),
+    mu_leg ~ dnorm(5,5),
+    sigma_leg ~ dexp(1),
+    sigma ~ dexp(1),
+    sigma_Le ~ dexp(1)),
+    data=d_2,
+    chains=4,
+    cores=4,log_lik=TRUE)
+
+
+precis(m.inferred.legs,depth=2)
+```
+Note that it gets the normal std deviation for the error between legs right at 0.2
+
+
+```{r}
+rethinking::postcheck(m.inferred.legs)
+
+
+tmp<- as_tibble(rethinking::extract.samples(m.inferred.legs)) %>%
+  select(bL,sigma,sigma_Le)
+
+bayesplot::mcmc_pairs(tmp)  
+```
+
+
+
+```{r}
+sims.leg.error <- sim_df(m.inferred.legs, d_2 )
+ 
+summarised.sims.leg.error <- group_by(sims.leg.error,index) %>%
+  summarise(mean.height=mean(height),
+            lower.height=quantile(height,0.05),
+            upper.height=quantile(height,0.95))%>%
+  ungroup() %>%
+  left_join(d)
+```
+
+
+
+How well does the model do? Pretty good, but is thrown off when the leg proportion is particularly low or high. Also exhibits shrinkage, guesses that true leg length is closer than the mean than observed. Blue dots are scaled proportion of legs to body.
+```{r}
+ggplot(summarised.sims.leg.error, aes(x=height,y=height))+
+  geom_point(color="red")+
+  geom_point( color="blue" ,aes(y=40*leg_prop))+
+  geom_errorbar(aes(ymin=lower.height,ymax=upper.height))+
+  ylim(0,20)+
+  ylab("Predicted Height")+
+  xlab("true leg proportion of height'")
+```
+
+
+
+Now let's ask how the inferred legs compare to the true legs.
+
+```{r}
+tmp<-rethinking::extract.samples(m.inferred.legs) %>%
+  as_tibble() %>%
+  select(LA) %>%
+  as.matrix() %>%
+  as_tibble() %>% 
+  pivot_longer(everything(),names_to = "name",values_to = "leg_length") %>%
+  separate(name, c("LA", "index")) %>%
+  select(index,leg_length) %>%
+  mutate(index = as.integer(index))
+
+leg.aves <- group_by(tmp,index) %>%
+  summarise(mean.leg.inferred = mean(leg_length))%>%
+  ungroup() %>%
+  left_join(d) %>%
+  mutate(leg.aves = (leg_left+leg_right)/2)
+```
+
+
+
+Is our method doing better than just averaging the legs? We can ask which comes closer
+```{r}
+
+leg.aves <- leg.aves %>%
+  mutate(delta_ave_legs = abs(  height*leg_prop - leg.aves),
+         delta_inferred_legs = abs(  height*leg_prop - mean.leg.inferred) ,
+         inferred_improvement = delta_ave_legs-delta_inferred_legs)
+
+mean(leg.aves$inferred_improvement)
+ggplot(leg.aves, aes(x=height,y=inferred_improvement))+
+  geom_point(color="red")+
+  ylab("Improvement from predicted leg")+
+  xlab("Actual height")
+```
+
+Compare to a simple model where we average the two legs.
+```{r}
+m.legs.aved <- 
+  ulam( alist(
+    height ~ dnorm(mu,sigma),
+    mu <-  b * (leg_left  + leg_right)/2 ,
+    b ~ dnorm(2,2),
+    sigma ~ dexp(1) ),
+    data=d,chains=4,
+    cores=4,log_lik=TRUE)
+
+precis(m.legs.aved)
+```
+
+
+
+```{r}
+rethinking::compare(m.legs.aved,m.inferred.legs)
+```
+## Missing data
+What if you only have one leg measurement for some of the individuals?
+
+simulate the data, and then label individuals 91-100 as not having a left measurement, and then create a column where these are NA.
+```{r}
+n <- 100
+set.seed(5)
+
+d <- 
+  tibble(index = seq(1:n) , height    = rnorm(n, mean = 10, sd = 2),
+         leg_prop  = runif(n, min = 0.4, max = 0.5)) %>% 
+  mutate(leg_left  = leg_prop * height + rnorm(n, mean = 0, sd = 0.2),
+         leg_right = leg_prop * height + rnorm(n, mean = 0, sd = 0.2),
+         no_left = (index<91)*0+(index>90)*1 ,
+         leg_left_mod = ifelse(no_left==1,NA,leg_left))
+```
+
+
+Now we write the ulam code
+```{r} 
+d_2 <- rename(d,ind=index)
+m.missing.legs <- 
+  ulam( alist(
+    height ~ dnorm(mu,sigma),
+    mu <- bL * LA[ind] ,
+    leg_left_mod[ind] ~ dnorm(LA[ind],sigma_Le),
+    leg_right[ind] ~ dnorm(LA[ind],sigma_Le),
+    LA[ind] ~ dnorm(mu_leg,sigma_leg),
+    bL ~ dnorm(2,2),
+    mu_leg ~ dnorm(5,5),
+    sigma_leg ~ dexp(1),
+    sigma ~ dexp(1),
+    sigma_Le ~ dexp(1)),
+    data=d_2,
+    chains=4,
+    cores=4,
+    log_lik = TRUE)
+```
+
+
+```{r} 
+precis(m.missing.legs,depth=2)
+```
+
+
+# Mark Recapture methods
+This is a very simple model where we just want to know how big the population is. Data are the number (M)arked, the number re(C)aptured and the number ma(R)ked in the recaptured population.
+
+Look here for more info:
+https://mc-stan.org/docs/2_18/stan-users-guide/mark-recapture-models.html
+
+
+It is just a binomial model turned on its side because we are estimating the N from which it is drawn. 
+
+```{r}
+scode<-"data {
+  int<lower=0> M;
+  int<lower=0> C;
+  int<lower=0,upper=min(M,C)> R;
+}
+parameters {
+  real<lower=(C - R + M)> N;
+}
+model {
+  R ~ binomial(C, M / N);
+}"
+
+
+stanfile<- write_stan_file(scode)
+
+#Compile the stan program
+ 
+mod_markcapture <- cmdstan_model(stanfile)
+```
+
+We'll use a population where we mark 100 individuals, and we recapture 100 individuals, 20 of which are marked. 
+
+```{r}
+
+stan_data=list(M=100,C=100,R=20)
+
+
+results <- mod_markcapture$sample(
+  data = stan_data,
+  chains = 4,
+  parallel_chains = 8,
+  iter_warmup = 1000,
+  iter_sampling = 1000
+)
+
+results$summary()
+```
+
+
+## Estimating population size and mortality/selection with repeated mark-recapture data
+Cormack-Jolly-Seber model 
+Population observed multiple times. We can estimate the probability of resighting an animal as well as the probability of death.
+
+There is a first and last sighting of every animal (they could be the same time point). If you see it later, you know it was alive during the time-periods you did not see it, so this helps estimate death probability. 
+```{r}
+scode ="
+// This models is modified from section 12.3 of Stan Modeling Language
+// User's Guide and Reference Manual
+functions {
+  int first_capture(array[] int y_i) {
+    for (k in 1 : size(y_i)) {
+      if (y_i[k]) {
+        return k;
+      }
+    }
+    return 0;
+  }
+
+  int last_capture(array[] int y_i) {
+    for (k_rev in 0 : (size(y_i) - 1)) {
+      // Compoud declaration was enabled in Stan 2.13
+      int k = size(y_i) - k_rev;
+      //      int k;
+      //      k = size(y_i) - k_rev;
+      if (y_i[k]) {
+        return k;
+      }
+    }
+    return 0;
+  }
+
+  matrix prob_uncaptured(int nind, int n_occasions, matrix p, matrix phi) {
+    matrix[nind, n_occasions] chi;
+
+    for (i in 1 : nind) {
+      chi[i, n_occasions] = 1.0;
+      for (t in 1 : (n_occasions - 1)) {
+        // Compoud declaration was enabled in Stan 2.13
+        int t_curr = n_occasions - t;
+        int t_next = t_curr + 1;
+        /*
+        int t_curr;
+        int t_next;
+
+        t_curr = n_occasions - t;
+        t_next = t_curr + 1;
+        */
+        t_curr = n_occasions - t;
+        t_next = t_curr + 1;
+        chi[i, t_curr] = (1 - phi[i, t_curr])
+                         + phi[i, t_curr] * (1 - p[i, t_next - 1])
+                           * chi[i, t_next];
+      }
+    }
+    return chi;
+  }
+}
+data {
+  int<lower=0> nind; // Number of individuals
+  int<lower=2> n_occasions; // Number of capture occasions
+  array[nind, n_occasions] int<lower=0, upper=1> y; // Capture-history
+  vector[nind] size; // indivisual size (aka the cofactor we want to test)
+}
+transformed data {
+  int n_occ_minus_1 = n_occasions - 1;
+  //  int n_occ_minus_1;
+  array[nind] int<lower=0, upper=n_occasions> first;
+  array[nind] int<lower=0, upper=n_occasions> last;
+
+  //  n_occ_minus_1 = n_occasions - 1;
+  for (i in 1 : nind) {
+    first[i] = first_capture(y[i]);
+  }
+  for (i in 1 : nind) {
+    last[i] = last_capture(y[i]);
+  }
+}parameters {
+  real<lower=0, upper=1> mean_phi; // Mean survival
+  real<lower=0, upper=1> mean_p; // Mean recapture
+  real beta_size; // Effect of size on survival
+  //vector[nind] epsilon; // I beleive this is the individual level random effect
+  // cut sigma no longer used real<lower=0> sigma;
+  // In case a weakly informative prior is used
+  //  real<lower=0> sigma;
+}
+transformed parameters {
+  matrix<lower=0, upper=1>[nind, n_occ_minus_1] phi;
+  matrix<lower=0, upper=1>[nind, n_occ_minus_1] p;
+  matrix<lower=0, upper=1>[nind, n_occasions] chi;
+  real mu;
+
+  // Constraints
+  mu = logit(mean_phi);
+  for (i in 1 : nind) {
+    for (t in 1 : (first[i] - 1)) {
+      phi[i, t] = 0;
+      p[i, t] = 0;
+    }
+    for (t in first[i] : n_occ_minus_1) {
+      phi[i, t] = inv_logit(mu + beta_size*size[i]);
+      p[i, t] = mean_p;
+    }
+  }
+
+  chi = prob_uncaptured(nind, n_occasions, p, phi);
+}
+model {
+  // Priors
+  // Uniform priors are implicitly defined.
+  //  mean_phi ~ uniform(0, 1);
+  //  mean_p ~ uniform(0, 1);
+  //  sigma ~ uniform(0, 5);
+  // In case a weaily informative prior is used
+  //  sigma ~ normal(2.5, 1.25);
+  //epsilon ~ normal(0, sigma);
+  beta_size ~ normal(0,3);
+
+  // Likelihood
+  for (i in 1 : nind) {
+    if (first[i] > 0) {
+      for (t in (first[i] + 1) : last[i]) {
+        1 ~ bernoulli(phi[i, t - 1]);
+        y[i, t] ~ bernoulli(p[i, t - 1]);
+      }
+      1 ~ bernoulli(chi[i, last[i]]);
+    }
+  }
+}
+"
+
+
+stanfile3<- write_stan_file(scode)
+
+#Compile the stan program
+ 
+mod_markselection <- cmdstan_model(stanfile3)
+```
+
+
+simulation date to fit
+```{r}
+
+logit<-Vectorize(function(x) log(x/(1-x)))
+inv_logit <- Vectorize(function(y) 1/(1+exp(-y)))
+
+
+# Define parameter values
+num_marked <-20 #number to mark each period
+phi_bar <- 0.65 #prob of survival
+p_bar <- 0.4 # prob of recapture
+n.occasions <- 26                   # Number of capture occasions
+beta_size <- 0.1 # effect of size on survival on logit scale
+
+
+
+marked <- rep(num_marked, n.occasions-1)   # Annual number of newly marked individuals
+phi <- rep(phi_bar, n.occasions-1)
+p <- rep(p_bar, n.occasions-1)
+
+# Define matrices with survival and recapture probabilities
+PHI <- matrix(phi, ncol = n.occasions-1, nrow = sum(marked))
+
+
+P <- matrix(p, ncol = n.occasions-1, nrow = sum(marked))
+
+# put in placeholder for size at 0
+sizes <- rep(0, sum(marked))
+
+
+for (i in 1:sum(marked)) {
+  sizes[i]<- rnorm(1,5,1)
+  PHI[i,]<-inv_logit(logit(phi)+rep(sizes[i]*beta_size,(n.occasions-1)))
+}
+
+# Define function to simulate a capture-history (CH) matrix
+simul.cjs <- function(PHI, P, marked){
+   n.occasions <- dim(PHI)[2] + 1
+   CH <- matrix(0, ncol = n.occasions, nrow = sum(marked))
+   # Define a vector with the occasion of marking
+   mark.occ <- rep(1:length(marked), marked[1:length(marked)])
+   # Fill the CH matrix
+   for (i in 1:sum(marked)){
+      CH[i, mark.occ[i]] <- 1       # Write an 1 at the release occasion
+      if (mark.occ[i]==n.occasions) next
+      for (t in (mark.occ[i]+1):n.occasions){
+         # Bernoulli trial: does individual survive occasion?
+         sur <- rbinom(1, 1, PHI[i,t-1])
+         if (sur==0) break		# If dead, move to next individual 
+              # Bernoulli trial: is individual recaptured? 
+         rp <- rbinom(1, 1, P[i,t-1])
+         if (rp==1) CH[i,t] <- 1
+         } #t
+      } #i
+   return(CH)
+}
+
+
+CH <- simul.cjs(PHI, P, marked)
+```
+
+```{r}
+stan_data<- list(y=CH,
+                 size=sizes,
+nind =(n.occasions-1)*num_marked,
+n_occasions =n.occasions)
+
+```
+
+```{r}
+results <- mod_markselection$sample(
+  data = stan_data,
+  chains = 4,
+  parallel_chains = 8,
+  iter_warmup = 1000,
+  iter_sampling = 1000
+)
+```
+
+
+```{r}
+results$summary(variables = c("mean_phi","mean_p","beta_size"))
+```
+
