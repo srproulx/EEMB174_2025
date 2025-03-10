@@ -51,16 +51,16 @@ What is our model?
 We model a linear relationship between breeding value of leg length and height
 $$
 H_i \sim \mathrm{Normal}(\mu_i, \sigma)\\
-\mu_i   = bL*LA_i  \\
-Ll_i  \sim \mathrm{Normal}(LA_i, \sigma_L)\\
-Lr_i \sim \mathrm{Normal}(LA_i, \sigma_L)\\
-LA \sim Normal(\mu_L , \sigma_L) \\ 
+\mu_i   = bL*HL_i  \\
+Ll_i  \sim \mathrm{Normal}(HL_i, \sigma_L)\\
+Lr_i \sim \mathrm{Normal}(HL_i, \sigma_L)\\
+HL \sim Normal(\mu_L , \sigma_HL) \\ 
 bL \sim \mathrm{Normal}(2,2)\\
 \mu_L \sim Normal(5,5)\\
 \sigma \sim \mathrm{Exponential}(1) \\
-\sigma_L \sim \mathrm{Exponential}(1) 
+\sigma_L \sim \mathrm{Exponential}(1) \\
+\sigma_HL \sim \mathrm{Exponential}(1) 
 $$ 
-
 
 
 
@@ -71,15 +71,15 @@ d_2 <- rename(d,ind=index)
 m.inferred.legs <- 
   ulam( alist(
     height ~ dnorm(mu,sigma),
-    mu <- bL * LA[ind] ,
-    leg_left[ind] ~ dnorm(LA[ind],sigma_Le),
-    leg_right[ind] ~ dnorm(LA[ind],sigma_Le),
-    LA[ind] ~ dnorm(mu_leg,sigma_leg),
+    mu <- bL * HL[ind] ,
+    leg_left[ind] ~ dnorm(HL[ind],sigma_L),
+    leg_right[ind] ~ dnorm(HL[ind],sigma_L),
+    HL[ind] ~ dnorm(mu_leg,sigma_HL),
     bL ~ dnorm(2,2),
     mu_leg ~ dnorm(5,5),
-    sigma_leg ~ dexp(1),
+    sigma_HL ~ dexp(1),
     sigma ~ dexp(1),
-    sigma_Le ~ dexp(1)),
+    sigma_L ~ dexp(1)),
     data=d_2,
     chains=4,
     cores=4,log_lik=TRUE)
@@ -87,6 +87,8 @@ m.inferred.legs <-
 
 precis(m.inferred.legs,depth=2)
 ```
+
+
 Note that it gets the normal std deviation for the error between legs right at 0.2
 
 
@@ -95,7 +97,7 @@ rethinking::postcheck(m.inferred.legs)
 
 
 tmp<- as_tibble(rethinking::extract.samples(m.inferred.legs)) %>%
-  select(bL,sigma,sigma_Le)
+  select(bL,sigma,sigma_L)
 
 bayesplot::mcmc_pairs(tmp)  
 ```
@@ -128,42 +130,6 @@ ggplot(summarised.sims.leg.error, aes(x=height,y=height))+
 
 
 
-Now let's ask how the inferred legs compare to the true legs.
-
-```{r}
-tmp<-rethinking::extract.samples(m.inferred.legs) %>%
-  as_tibble() %>%
-  select(LA) %>%
-  as.matrix() %>%
-  as_tibble() %>% 
-  pivot_longer(everything(),names_to = "name",values_to = "leg_length") %>%
-  separate(name, c("LA", "index")) %>%
-  select(index,leg_length) %>%
-  mutate(index = as.integer(index))
-
-leg.aves <- group_by(tmp,index) %>%
-  summarise(mean.leg.inferred = mean(leg_length))%>%
-  ungroup() %>%
-  left_join(d) %>%
-  mutate(leg.aves = (leg_left+leg_right)/2)
-```
-
-
-
-Is our method doing better than just averaging the legs? We can ask which comes closer
-```{r}
-
-leg.aves <- leg.aves %>%
-  mutate(delta_ave_legs = abs(  height*leg_prop - leg.aves),
-         delta_inferred_legs = abs(  height*leg_prop - mean.leg.inferred) ,
-         inferred_improvement = delta_ave_legs-delta_inferred_legs)
-
-mean(leg.aves$inferred_improvement)
-ggplot(leg.aves, aes(x=height,y=inferred_improvement))+
-  geom_point(color="red")+
-  ylab("Improvement from predicted leg")+
-  xlab("Actual height")
-```
 
 Compare to a simple model where we average the two legs.
 ```{r}
@@ -202,26 +168,28 @@ d <-
 ```
 
 
-Now we write the ulam code
-```{r} 
+The ulam code is basically the same, we are just now using the column that has NA values for some of the leg_left entries. Now the line that was the likelihood becomes a prior. 
+```{r}
 d_2 <- rename(d,ind=index)
 m.missing.legs <- 
   ulam( alist(
     height ~ dnorm(mu,sigma),
-    mu <- bL * LA[ind] ,
-    leg_left_mod[ind] ~ dnorm(LA[ind],sigma_Le),
-    leg_right[ind] ~ dnorm(LA[ind],sigma_Le),
-    LA[ind] ~ dnorm(mu_leg,sigma_leg),
+    mu <- bL * HL[ind] ,
+    leg_left_mod[ind] ~ dnorm(HL[ind],sigma_L),
+    leg_right[ind] ~ dnorm(HL[ind],sigma_L),
+    HL[ind] ~ dnorm(mu_leg,sigma_HL),
     bL ~ dnorm(2,2),
     mu_leg ~ dnorm(5,5),
-    sigma_leg ~ dexp(1),
+    sigma_HL ~ dexp(1),
     sigma ~ dexp(1),
-    sigma_Le ~ dexp(1)),
+    sigma_L ~ dexp(1)),
     data=d_2,
     chains=4,
-    cores=4,
-    log_lik = TRUE)
+    cores=4,log_lik=TRUE)
+
+
 ```
+
 
 
 ```{r} 
@@ -418,7 +386,7 @@ mod_markselection <- cmdstan_model(stanfile3)
 ```
 
 
-simulation date to fit
+simulation data to fit
 ```{r}
 
 logit<-Vectorize(function(x) log(x/(1-x)))
