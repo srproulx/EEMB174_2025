@@ -1,0 +1,234 @@
+---
+title: "Alternative packages"
+author: "Stephen R. Proulx"
+output: pdf_document
+---
+ 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(rethinking)
+library(brms)
+library(rstanarm)
+library(tidybayes)
+library(shinystan)
+source("../helper.R")
+```
+
+
+ 
+ 
+# Course Evaluations:
+
+https://ucsb.bluera.com/ucsb/
+
+
+EEMB174
+https://go.blueja.io/9N1-zLX9j0SRig0jswnolw
+
+EEMB274
+https://go.blueja.io/mm-AinrblEmZzsbBgFSGYA
+
+
+# Packages for specifying and running models:
+
+
+1) Rstanarm
+https://mc-stan.org/users/documentation/case-studies/tutorial_rstanarm.html
+pros: Precompiled programs (you don't need to install stan), fast, uses lme syntax. 
+cons: puts you back into the flow-chard statistics world to choose which program to run on your data, prior specificaion is limited.
+
+2) brms
+https://cran.r-project.org/web/packages/brms/vignettes/brms_overview.pdf
+pros: Uses lme syntax, wide range of model types from a single function call, allows priors to be specified
+cons: Has to compile the code to run, prior syntax is opaque, uses indicator variables so can be hard to reconnect to original data.
+
+3) ulam
+pros: pretty general model specification, very explicit priors, pretty flexible
+cons: Need to recompile if code is modified, must use specific formatting for index varaibles, not much support/documentation/descriptive errors.
+
+
+# Packages to help with plotting or post-processing
+
+1) tidybayes
+https://cran.r-project.org/web/packages/tidybayes/index.html
+
+2) bayesplot
+https://cran.r-project.org/web/packages/bayesplot/vignettes/plotting-mcmc-draws.html
+
+3) shinystan
+https://mc-stan.org/users/interfaces/shinystan
+
+
+
+## Running the same data through three different packages
+
+
+treefrog data again
+```{r}
+ 
+data(reedfrogs)
+d <- reedfrogs %>% as_tibble()%>% 
+  rowid_to_column("tank") %>%
+  mutate(
+    P=(pred=="no")*0+(pred=="pred")*1,
+    S=(size=="small")*1+(size=="large")*2,
+    dtreat=(density=="10")*1+ (density=="25")*2+ (density=="35")*3,
+    dfac=as.factor(dtreat),
+    tfac=as.factor(tank)
+         ) 
+
+
+```
+ 
+
+
+### ulam model
+
+Here we have a model you should be fairly used to, individual effects for each tank with a common prior for all tanks.
+
+```{r}
+# density*pred
+m1.6 <- ulam(
+alist(
+surv ~ binomial( density , p ),
+logit(p) <- a[tank] + bp[dtreat]*(P) +  bpnp[dtreat]*(1-P) , 
+a[tank] ~ normal(0 , sigma ), 
+bp[dtreat] ~ normal( 0 , 1 ),
+bpnp[dtreat] ~ normal( 0 , 1 ),
+a_bar ~ normal( 0 , 1.5 ),
+sigma ~ exponential( 1 )
+), data= select(d,surv,density,tank,dtreat,P) , chains=4 , cores=4 , iter=3000, log_lik=TRUE  )
+```
+
+```{r}
+precis(m1.6, depth=2)
+```
+
+
+
+```{r}
+
+post<- as_tibble(rethinking::extract.samples(m1.6))  %>%
+  select(bp,bpnp)
+
+post_summarized <- post%>%
+  summarise(
+    bp1mean=mean(inv_logit(bp[,1])),       
+    bp2mean=mean(inv_logit(bp[,2])),
+    bp3mean=mean(inv_logit(bp[,3])),
+    bpnp1mean=mean(inv_logit(bpnp[,1])),
+    bpnp2mean=mean(inv_logit(bpnp[,2])),
+    bpnp3mean=mean(inv_logit(bpnp[,3]))
+  )
+  
+  post_summarized
+  
+```
+
+
+```{r}
+shinystan::launch_shinystan(m1.6@stanfit)
+```
+
+
+
+### with brms
+"A package for Bayesian multilevel Models using Stan". This package uses lme style syntax to describe the model formulas and also allows fairly general specification of the priors. You are stuck with index variable type models, so the raw parameter table can be hard to interpret, but the package also has tools for visualizing the parameter distributions that can help reconnecting the output to your data. The package generates stan code which then is compiled and run, but you can compile once and reuse the program. 
+
+```{r}
+
+m1.6.brm<- brm(surv | trials(density) ~
+                        pred*dfac + (1|tank) , 
+                        data = d, family = binomial("logit"),
+                      prior = c(prior(normal(0,2), class = Intercept),
+                prior(normal(0, 1), class = b),
+                prior(exponential(1), class = sd)),
+                future = FALSE  ,chains=4 , 
+                iter = 3000 ,  cores=4 )
+  
+
+```
+
+You can access the actual `stan` model that is being written and modify at the code level if you desire:
+```{r}
+m1.6.brm$model
+```
+
+
+The model summary includes many of the same things as our `ulam` output. The main difference is that the intercept is also the estimate for the first class in each category. It can make it difficult to read off the values of the table. 
+```{r}
+summary(m1.6.brm)
+```
+
+
+On the plus side, `brms` has tools to plot many of the things we are interested. `conditional_effects` gives plots of the different contrasts back on the original scale (in this case the probability scale). It also shows you the full esitmates with labels that match your original data. Cons are that these figures are hard to customize. 
+```{r}
+brms::conditional_effects(m1.6.brm)
+```
+
+Wrong BRMS model, one where tank also has a main effect:
+```{r}
+
+m1.6.brm.wrong<- brm(surv | trials(density) ~
+                        pred*dfac + tank , 
+                        data = d, family = binomial("logit"),
+                      prior = c(prior(normal(0,2), class = Intercept),
+                prior(normal(0, 1), class = b)),
+                future = FALSE  ,chains=4 , 
+                iter = 3000 ,  cores=4 )
+  
+
+```
+```{r}
+brms::conditional_effects(m1.6.brm_wrong)
+```
+### Using rstanrm:
+The main advantage of `rstanarm` is that the models are all pre-compiled. This means you don't have to have `stan` installed on your system to use them, and you don't have to wait for them to compile. The downsides is that they are much less customizable and more difficult to verify that they are working as expected. Priors can be specified, but are limited. In this case, I could not get the binomial regression to give sensible results on simulated data, so I must be somehow mis-specifying the model. 
+
+
+ 
+
+Specific functions must be used for each type of model. Here we want `stan_glmer`. 
+
+
+```{r}
+m1.6.stan_glmer <- stan_glmer( cbind(surv,density) ~ pred*dfac  + (1 | tank) ,
+                            family = binomial,
+                            prior = normal( 0, 1),
+                            prior_intercept = normal( 0, 1.5),
+                             prior_aux = exponential(1, autoscale = FALSE),
+                              data = d)
+```
+
+
+ 
+
+```{r}
+summary(m1.6.stan_glmer, digits = 3)
+  
+```
+
+
+We can also run the model that does not account for variance among tanks. This now can run with `stan_glm`.
+```{r}
+dglm<-d %>%
+  mutate(tank_f = as.factor(tank))
+
+m1.6.stan_glm <- stan_glm( cbind(surv,density) ~    pred*dfac ,
+                            family = binomial,
+                            prior = normal( 0, 1),
+                            prior_intercept = normal( 0, 1.5),
+                            prior_aux = exponential(1),
+                              data = dglm)
+```
+
+```{r}
+summary(m1.6.stan_glm, digits=3)
+```
+
+
+
+
