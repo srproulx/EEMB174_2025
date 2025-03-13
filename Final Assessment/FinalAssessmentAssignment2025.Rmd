@@ -1,0 +1,280 @@
+---
+title: "FinalExam174_2025"
+author: "Stephen R. Proulx"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(rethinking)
+library(bayesplot)
+#source("../helper.R")
+
+``` 
+
+
+
+
+
+## Short Awnswer
+
+### Question 1 (5 pts)
+
+Consider this dataset where $y$ is the number of eggs laid by individual fruit flies who are put into vials with $x$ microliters of yeast paste. 
+```{r}
+data <- tibble( y = c(35,43,54,33,65,54,72,55,66), x = c(5,5,5,10,10,10,15,15,15))
+```
+
+What's wrong with this model specified here? Re-write the `ulam` model. 
+```{r}
+model <- ulam(alist(
+  y ~ dbinom(total, mu),
+  mu <- a + b * x,
+  a ~ dnorm(0,3),
+  b ~ dnorm(0,1)
+) ,  data=data)
+```
+
+
+### Question 2 (10 pts)
+ The dataframe has a column $y$ that are body length measurements for a species of lizard. Column $x_1$ is 0 for male lizards and 1 for female lizards. Column $x_2$ is 0 for brown throated lizards and 1 for green throated lizards. We add another 4 columns that are indicator variables for each of the 4 states that a lizard can be in (male/female X brown/green), defining $x_{i,j}=1$ if $x_1=i$ and $x_2=j$. 
+ 
+Below are three model definitions (partial definitions, I have not written out the priors).
+
+Model 1
+$$
+ y \sim \mathrm{normal}(\mu,\sigma) \\
+ \mu = a + b_1 x_1 + b_2 x_2
+ 
+$$
+Model 2
+$$
+ y \sim \mathrm{normal}(\mu,\sigma) \\
+ \mu = a + b_1 x_1 + b_2 x_2 + b_{12} x_1 x_2
+ 
+$$
+Model 3
+$$
+ y \sim \mathrm{normal}(\mu,\sigma) \\
+ \mu =  b_{0,0} x_{0,0} + b_{0,1} x_{0,1} + b_{1,0} x_{1,0} + b_{1,1} x_{1,1}
+$$
+(A) Which of these models can be considered models with interaction? Explain why.
+
+
+(B) Consider these values for the means of categories below: 
+
+sex   color    mean length    
+----- -------  --------------
+M      B         13
+M      G         15
+F      B         16
+F      G         20
+
+Can you choose values of the parameters (i.e. just pick them by hand, no need to fit a model) for each of the three models that would have the mean, $\mu$, be equal to these mean values in each category? 
+
+
+### Question 3 (10 pts)
+Consider this dataset:
+
+```{r}
+data <- tibble( x=seq(1,10),y=c(4.4,6.0,7,8,8,7,5,3,2,5))
+
+ggplot(data,aes(x=x,y=y))+ 
+  geom_point()+
+  ylim(0,10)
+```
+
+
+
+
+Here are two potential models to fit these data:
+```{r}
+m.1 <- ulam(alist(
+  y ~ dnorm(mu, sigma),
+  mu <- a + b1*x+ b2*x^2,
+  a ~ dnorm(5,2.5),
+  b1 ~ dnorm(0,1),
+  b2 ~ dnorm(0,1),
+  sigma ~ dexp(1)),
+  data=data, log_lik = TRUE
+)
+```
+
+```{r}
+m.2 <- ulam(alist(
+  y ~ dnorm(mu, sigma),
+  mu <- a + b1*x + b2*x^2 + b3*x^3,
+  a ~ dnorm(5,2.5),
+  b1 ~ dnorm(0,1),
+  b2 ~ dnorm(0,1),
+  b3 ~ dnorm(0,1),
+  sigma ~ dexp(1)),
+  data=data, log_lik = TRUE
+)
+```
+
+(A) After fitting the models you could compute the probability of observing the data given the parameters. (don't do this now, just do the thought exercise.) Which model do you expect to fit the observed data best, and why? 
+
+
+
+
+
+(B) Now consider this additional point is discovered and added to the dataset. Which model do you expect will fit this dataset better and why? Can you relate this to WAIC?
+
+```{r}
+
+new_data <-  tibble( x=c(10), y= c(0.0) )
+
+ggplot(data,aes(x=x,y=y))+ 
+  geom_point()+
+  geom_point(data=new_data,color="red")+
+  ylim(0,10)
+```
+
+
+
+## Analysis Challenge
+
+
+The paper on bacterial coevolution discusses prey bacteria that have been experimentally evolved in the presence of a predator. These evolved bacteria were then assayed for their fitness, and this was done in 4 environments. In the "no predator" environment the bacteria are allowed to grow without a predator. In the "coevolved predator" treatment they are being consumed by the predator strain that was present at the end of the coevolution experiment. In the "ancestral predator" treatment they are being consumed by the ancestral predator that has not undergone coevolution. In the "control predator" treatment a predator that was evolved in the absence of prey is included. 
+
+We would like to ask whether or not the evolved prey bacteria respond differently to the 4 treatments. 
+
+In the experimental design, there were 12 seperate evolved populations, and each population was assayed 3 times. The 12 evolved populations come from 3 different subclones (4 populations from each) and are either antibiotic resistant (resistance=="r") or not.
+
+
+First we load the data:
+```{r}
+data<-read.csv("PreyCompetitionResults.csv")%>%
+  as_tibble()%>%
+  mutate(treatment_code=(treatment=="coevolved predator")*1 +(treatment=="control predator")*2+(treatment=="ancestral predator")*3+(treatment=="no predator")*4,
+         resistant_code=(resistance=="r")*1+(resistance=="s")*2,log_rel_fitness=log(rel_fitness))%>%
+  mutate(obs_id =(population*100+treatment_code))%>%
+  mutate(observation=as.numeric(as.factor(obs_id))) %>%view()
+
+```
+
+Note that I created a column called "observation" which uniquely identifies each population by treatment. i.e. population 1 with the coevolved predator is coded as observation group 1, and has three replicate observations. This "observation" code is what you will use to group the replicates- the column observation will represent the groupings for the partial pooling models.
+
+
+And we can start by visualizing the data, showing the growth rates for all 12 populations. You can see considerable variability in the growth rates among assays and between populations. 
+```{r}
+ggplot(data,aes(x=population,y=log_rel_fitness,color=as.factor(subclone))) +
+  geom_point()+
+  facet_wrap(~treatment)
+
+
+```
+
+
+
+### Q4  create a complete pooling model for all the observations with no predictive factors. (10 pts)
+The dataset has 143 observations, this comes from 12 populations assayed in 4 environments and replicated 3 times ($12*4*3=144$, with one observation missing). Here is a way to specify the model:
+$$
+\mathrm{log\ fitness} \sim \mathrm{Normal}(\mu,\sigma) \\
+\mu \sim \mathrm{Normal}(0,2) \\
+\sigma \sim \mathrm{Exponential}(1)
+$$
+
+(A) Explain why this specification for the likelihood and for the priors is appropriate. What makes this a complete pooling model?
+
+
+
+
+(B) Specify the model using `ulam` and report the output. Explain how you can assess if the MCMC algorithm adequately sampled the posterior distribution.
+
+
+
+
+
+### Q5 make no-pooling model at the level of evolved populations (10 pts)
+To do this we have to group the replicate assays of each evolved population in each predator environment. I have already created the column "observation" for this. 
+
+(A) Write out the no-pooling model where we assign a mean log growth rate for each observation group. Here is the beginning of the model:
+$$
+\mathrm{log\ fitness} \sim \mathrm{Normal}(\mu,\sigma) \\
+YOUR MODEL HERE
+$$
+
+(B) Specify the model using `ulam` and report the output. How do the Pooling and No Pooling models compare in their assessment of variability at the level of the relative fitness observation?
+
+
+
+COMPARING MODELS: No Pooling has lower sigma because the model allows them to predict each set of data points more closely. The only variability left is that of the replicate observations, and this will not go down even if we better predict the means for each observation group. 
+
+### Q6 make partial pooling model at the level of evolved populations (10 pts)
+
+(A) Write out the partial-pooling model where we assign a mean log growth rate for each observation group, but that observation group value has a prior that includes a standard deviation parameter. 
+$$
+\mathrm{log\ fitness} \sim \mathrm{Normal}(\mu,\sigma) \\
+
+YOUR MODEL HERE
+$$
+
+(B) Specify the model using `ulam` and report the output. Is this any different in terms of sigma than the No Pooling model? 
+
+
+
+### Q7 make partial pooling model with predator treatment as factor. (20 pts)
+
+
+(A) Write out a model where the effect of observation group is a partial-pooling model (i.e. a random effect) and where there is an effect of predator treatment.
+
+Predator treatment has 4 levels. Write a table connecting the value in the column "treatment" to the value in the column "treatment code".
+
+
+1: coevolved pred
+2: control pred
+3: ancestral pred
+4: No pred
+
+$$
+\mathrm{log\ fitness} \sim \mathrm{Normal}(\mu,\sigma) \\
+YOUR MODEL HERE
+$$
+
+(B) Specify the model using `ulam` and report the precis output. 
+
+
+(C) Compute contrasts for the treatment effects. Because there are 4 treatment types, there are 6 contrasts (1-2, 1-3, 1-4, 2-3, 2-4, 3-4).  How can you interpret these contrasts to tell us how the bacteria evolved under the four different experimental treatments?
+
+Note that the columns that you are going to use will have names like "a[,1]" and "a[,2]", where the "a" will depend on the variable name you used.
+
+
+
+
+
+(D) Compare the four models using `compare`. Explain what you conclude based on the WAIC scores. Interpret the pWAIC values. 
+
+
+
+
+(E) Based on the WAIC scores and the contrasts that you calculated for the treatment effects, would you conclude that the prey bacteria evolved a a higher relative growth rate in when exposed to predators? Explain how the information you get from the contrasts is different from the information you get when comparing WAIC scores.
+
+
+
+### Q8 Add in additional co-factors (5 pts)
+The populations are also defined by which subclone they were derived from and whether or not they are antibiotic resistant.
+
+(A) Write out a model that includes subclone identity and resistance.
+
+
+
+(B) Use `ulam` to run this model and report the `precis`
+
+
+
+
+(C) Compute the contrasts for treatment using the posterior samples for this model
+
+
+
+(D) Why might it be more conservative (i.e. prevent overfitting) to include sub-clone as a predictor in this model?
+
+
+
+
+
+
